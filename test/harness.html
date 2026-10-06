@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Google Flow - Harness Project</title>
+<style>
+  body{font-family:sans-serif;background:#111;color:#ddd;padding:20px}
+  a{color:#8ab4f8;display:block;margin:4px 0}
+  #grid{height:260px;overflow:auto;border:1px solid #444;width:420px;padding:6px}
+  flow-tile-container{display:block;position:relative;height:140px;margin:6px 0;background:#222;border-radius:8px}
+  flow-tile-container img.thumbnail{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#333}
+  .hotbar{position:absolute;top:6px;right:6px;display:none}
+  .hotbar button{background:#000a;color:#fff;border:0;border-radius:6px;padding:4px 8px}
+  [role=menu]{position:fixed;background:#2a2a2a;border:1px solid #555;border-radius:8px;padding:4px;display:none;z-index:50}
+  [role=menuitem]{padding:6px 12px;cursor:pointer;color:#eee}
+  [role=menuitem]:hover{background:#444}
+  .toast{position:fixed;left:20px;bottom:20px;background:#5f2120;color:#fff;padding:10px 14px;border-radius:8px}
+  pre{font-size:11px;max-height:160px;overflow:auto;background:#000;padding:6px}
+</style>
+</head>
+<body>
+<h1>Local harness for flow-bulk-downloader.user.js</h1>
+<p>Fakes Tampermonkey's GM_* APIs, Flow's <code>WIZ_global_data</code>, a batchexecute backend (listing, media, credits,
+upscale) and a project grid with Flow-like hover menus (Download → 1K Original / 2K Upscaled / 4K Upscaled).
+Upscale #2 fails with a toast and every upscale after the 3rd successful one hits a fake daily limit. Local testing only.</p>
+<a href="/project/11111111-1111-4111-8111-111111111111">Harness Project One</a>
+<a href="/project/22222222-2222-4222-8222-222222222222">Harness Project Two</a>
+<div id="grid"></div>
+<div role="menu" id="menu">
+  <div role="menuitem" data-act="favorite">Add to favorites</div>
+  <div role="menuitem" data-act="download">Download ▸</div>
+  <div role="menuitem" data-act="delete">Delete</div>
+</div>
+<div role="menu" id="submenu">
+  <div role="menuitem" data-res="1K">1K Original</div>
+  <div role="menuitem" data-res="2K">2K Upscaled</div>
+  <div role="menuitem" data-res="4K">4K Upscaled</div>
+</div>
+<pre id="calls"></pre>
+<script>
+  history.replaceState(null, '', '/project/11111111-1111-4111-8111-111111111111' + location.hash);
+  const PID = '11111111-1111-4111-8111-111111111111';
+  const logEl = document.getElementById('calls');
+  const hlog = (s) => { logEl.textContent += s + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+
+  window.WIZ_global_data = { SNlM0e: 'AT_TOKEN_FAKE', FdrFJe: '-1234567890', cfb2h: 'boq_harness_build' };
+  const store = window.__store = {};
+  if (location.hash.includes('runonload')) {
+    // Pre-seed settings so the "Run on page load" path can be exercised with a plain reload.
+    const d = new Date(Date.now() - 10 * 86400000); const p = (n) => String(n).padStart(2, '0');
+    store['fbd.settings'] = { runOnLoadHours: 1, quality: 'original', images: true, videos: false, delayMs: 100, sinceLocal: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T00:00`, manifestPerRun: false };
+    store['fbd.lastRun'] = Date.now() - 5 * 3600000;
+  }
+  window.GM_getValue = (k) => store[k];
+  window.GM_setValue = (k, v) => { store[k] = v; };
+  window.GM_deleteValue = (k) => { delete store[k]; };
+  window.GM_info = { script: { version: 'harness' } };
+  window.__downloads = []; window.__notifications = [];
+  window.GM_notification = (o) => { window.__notifications.push(o); hlog('NOTIFY ' + (o && o.text)); };
+  window.GM_download = (o) => { window.__downloads.push(o.name); hlog('GM_DOWNLOAD ' + o.name); setTimeout(() => o.onload && o.onload(), 40); };
+  window.GM_xmlhttpRequest = (o) => {
+    const isVideo = /\/video\//.test(o.url);
+    const bytes = isVideo ? new Uint8Array([0,0,0,0x18,0x66,0x74,0x79,0x70,0x69,0x73,0x6f,0x6d,1,2,3,4]) : new Uint8Array([0xff,0xd8,0xff,0xe0,0,0,0,0,0,0,0,0,1,2,3,4]);
+    setTimeout(() => o.onload({ status: 200, response: new Blob([bytes], { type: isVideo ? 'video/mp4' : 'image/jpeg' }), responseHeaders: 'content-type: ' + (isVideo ? 'video/mp4' : 'image/jpeg') + '\r\n', finalUrl: o.url }), 30);
+  };
+  const origClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.download) { window.__downloads.push(this.download); hlog('DOWNLOAD ' + this.download); return; }
+    return origClick.call(this);
+  };
+
+  const U = (n) => `${String(n).padStart(8, '0')}-1111-4222-8333-444455556666`;
+  const DAY = 86400000;
+  const now = Date.now();
+  const N = 12;
+  const tokenOf = (i) => `TK${i}X`;
+  const isVideoAt = (i) => i % 4 === 3;
+  function details(i, extra) {
+    const d = new Array(14).fill(null);
+    d[5] = `https://lh3.googleusercontent.com/asb/${tokenOf(i)}=s256`;
+    d[6] = [null, [[i % 2 ? 'NARWHAL' : 'GEM_PIX_2']]];
+    d[8] = [3]; d[10] = `https://lh3.googleusercontent.com/asb/${tokenOf(i)}`; d[13] = 123456;
+    return Object.assign(d, extra || {});
+  }
+  function listing(projectRef) {
+    const pid = projectRef.replace('projects/', '');
+    const entries = [], records = [];
+    for (let i = 0; i < N; i++) {
+      const created = now - i * 2 * DAY;
+      const isVideo = isVideoAt(i);
+      const mediaId = U(100 + i), wf = U(200 + i);
+      entries.push([U(300 + i), U(99), null, [`Prompt ${i} ${i % 3 === 0 ? 'cat' : 'landscape'} for ${pid.slice(0, 4)}`, [Math.floor(created / 1000), 0], isVideo, null, mediaId, wf, true], pid]);
+      if (isVideo) records.push([wf, pid, mediaId, null, null, details(i), null, [[null,null,null,null,null,null,null,null, 'https://flow-content.google/video/' + wf + '?Expires=1&Signature=s', null,null,null,'abra_r2v_8s']]]);
+      else records.push([wf, pid, mediaId, null, null, details(i, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=1&Signature=s' }), null]);
+    }
+    // an uploaded reference image: asset entry only, no generation record
+    entries.push([U(399), U(99), null, ['my-upload.png', [Math.floor((now - DAY) / 1000), 0], false, null, U(199), null, true], pid]);
+    return [entries, records, 'token'];
+  }
+  function record(mediaId) {
+    const i = parseInt(mediaId.slice(0, 8), 10) - 100;
+    if (i === 99) return [U(499), PID, mediaId, null, null, details(99, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=2&Signature=fresh' }), null];
+    const isVideo = isVideoAt(i);
+    const wf = U(200 + i);
+    return isVideo
+      ? [wf, PID, mediaId, null, null, details(i), null, [[null,null,null,null,null,null,null,null, 'https://flow-content.google/video/' + wf + '?Expires=2&Signature=fresh', null,null,null,'abra_r2v_8s']]]
+      : [wf, PID, mediaId, null, null, details(i, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=2&Signature=fresh' }), null];
+  }
+  function envelope(rpcid, payload) {
+    const json = JSON.stringify([['wrb.fr', rpcid, JSON.stringify(payload), null, null, null, 'generic']]);
+    const tail = JSON.stringify([['di', 42], ['af.httprm', 42, '-1', 7]]);
+    return `)]}'\n\n${json.length + 1}\n${json}\n${tail.length + 1}\n${tail}\n`;
+  }
+  window.__calls = [];
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    if (String(url).includes('/data/batchexecute')) {
+      const u = new URL(url, location.origin);
+      const rpcid = u.searchParams.get('rpcids');
+      window.__calls.push({ rpcid, path: u.pathname });
+      if (rpcid === 'SPrCad') {
+        realFetch(url).catch(() => {}); // a real request so the Performance API records it
+        await new Promise((r) => setTimeout(r, 150));
+        return new Response(envelope(rpcid, [null, 'A'.repeat(120000)]), { status: 200 });
+      }
+      const body = new URLSearchParams(opts && opts.body);
+      const inner = JSON.parse(JSON.parse(body.get('f.req'))[0][0][1]);
+      hlog(`RPC ${rpcid} ${JSON.stringify(inner)}`);
+      if (rpcid === 'Zzl0ze') return new Response(envelope(rpcid, listing(inner[0])), { status: 200 });
+      if (rpcid === 'as29s') return new Response(envelope(rpcid, record(inner[0])), { status: 200 });
+      if (rpcid === 'nzlxg') return new Response(envelope(rpcid, [1234, 1]), { status: 200 });
+      return new Response(")]}'\n\n", { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+
+  // ---- Fake project grid with virtualised thumbnails and Flow-like hover menus ----
+  const grid = document.getElementById('grid');
+  const menu = document.getElementById('menu');
+  const submenu = document.getElementById('submenu');
+  let activeTile = null;
+  for (let i = 0; i < N; i++) {
+    const t = document.createElement('flow-tile-container');
+    t.dataset.i = i;
+    t.innerHTML = `<img class="thumbnail" alt=""><div class="hotbar"><button aria-label="More options">⋮</button></div>`;
+    t.addEventListener('mouseenter', () => { t.querySelector('.hotbar').style.display = 'block'; });
+    t.addEventListener('mouseleave', () => { t.querySelector('.hotbar').style.display = 'none'; });
+    t.querySelector('button').addEventListener('click', (e) => {
+      activeTile = t; const r = e.target.getBoundingClientRect();
+      menu.style.left = r.left + 'px'; menu.style.top = (r.bottom + 4) + 'px'; menu.style.display = 'block'; submenu.style.display = 'none';
+    });
+    grid.appendChild(t);
+  }
+  function virtualise() {
+    const top = grid.scrollTop, bottom = top + grid.clientHeight;
+    const base = grid.firstElementChild ? grid.firstElementChild.offsetTop : 0;
+    for (const t of grid.children) {
+      const img = t.querySelector('img');
+      const y = t.offsetTop - base;
+      const visible = y + t.offsetHeight > top - 150 && y < bottom + 150;
+      if (visible) { if (!img.getAttribute('src')) img.setAttribute('src', `/asb/${tokenOf(+t.dataset.i)}=s256`); }
+      else img.removeAttribute('src');
+    }
+  }
+  grid.addEventListener('scroll', virtualise); virtualise();
+  const dlItem = menu.querySelector('[data-act="download"]');
+  const openSub = () => { const r = dlItem.getBoundingClientRect(); submenu.style.left = (r.right + 2) + 'px'; submenu.style.top = r.top + 'px'; submenu.style.display = 'block'; };
+  dlItem.addEventListener('mouseenter', openSub); dlItem.addEventListener('click', openSub);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { menu.style.display = 'none'; submenu.style.display = 'none'; } });
+
+  let upscaleAttempts = 0, upscaleOk = 0;
+  function toast(text) { const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'alert'); d.textContent = text; document.body.appendChild(d); setTimeout(() => d.remove(), 4000); hlog('TOAST ' + text); }
+  submenu.addEventListener('click', async (e) => {
+    const item = e.target.closest('[role=menuitem]'); if (!item || !activeTile) return;
+    const res = item.dataset.res; const i = +activeTile.dataset.i;
+    menu.style.display = 'none'; submenu.style.display = 'none';
+    hlog(`FLOW download tile ${i} at ${res}`);
+    if (res !== '1K') {
+      upscaleAttempts++;
+      await window.fetch(`/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=SPrCad&_=${Date.now()}`, { method: 'POST', body: 'f.req=x' }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 300));
+      if (upscaleAttempts === 2) { toast('Upscale failed. Please try again.'); return; }
+      if (upscaleOk >= 3) { toast("You've reached your daily limit of upscaled downloads. Try again tomorrow."); return; }
+      upscaleOk++;
+    }
+    const size = res === '1K' ? 60000 : 180000;
+    const bytes = new Uint8Array(size); bytes.set([0xff,0xd8,0xff,0xe0]);
+    const blob = new Blob([bytes], { type: 'image/jpeg' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Flow_${res}_${i}.jpg`; document.body.appendChild(a); a.click(); a.remove();
+  });
+</script>
+<script>document.write('<script src="/flow-bulk-downloader.user.js?v=' + Date.now() + '"><\/script>'); // cache-bust so edits show up on reload</script>
+</body>
+</html>

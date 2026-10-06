@@ -1,0 +1,21 @@
+{
+  "name": "flow-bulk-downloader",
+  "version": "0.3.0",
+  "description": "Tampermonkey userscript that bulk-downloads Google Flow images/videos by date, at original or upscaled quality, with manifests, folders and rate-limit handling.",
+  "private": true,
+  "license": "MIT",
+  "author": "hunterg2",
+  "homepage": "https://github.com/hunterg2/FlowDownloader",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hunterg2/FlowDownloader.git"
+  },
+  "scripts": {
+    "test": "node test/parse.test.cjs",
+    "check": "node --check flow-bulk-downloader.user.js && node test/parse.test.cjs",
+    "harness": "python -m http.server 8765 --bind 127.0.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

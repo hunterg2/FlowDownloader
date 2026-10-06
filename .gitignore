@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+# Diagnose exports and backups contain account data; never commit them
+flow-bulk-diagnose-*.json
+flow-bulk-backup-*.json
+manifest-*.csv
