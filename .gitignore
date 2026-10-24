@@ -6,3 +6,4 @@ Thumbs.db
 flow-bulk-diagnose-*.json
 flow-bulk-backup-*.json
 manifest-*.csv
+.claude/
