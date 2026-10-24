@@ -1,6 +1,6 @@
 {
   "name": "flow-bulk-downloader",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Tampermonkey userscript that bulk-downloads Google Flow images/videos by date, at original or upscaled quality, with manifests, folders and rate-limit handling.",
   "private": true,
   "license": "MIT",

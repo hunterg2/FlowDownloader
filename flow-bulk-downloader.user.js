@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.11
+// @version      0.3.12
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -18,6 +18,7 @@
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_notification
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @connect      flow-content.google
 // @connect      googleusercontent.com
@@ -66,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.11';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.12';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -473,6 +474,9 @@
   function wantsUpscale(kind, settings) {
     return kind === 'video' ? settings.videoQuality === 'upscaled' : kind === 'image' && settings.quality === 'upscaled';
   }
+  /** Whether this item gets upscaled. Flow's upscale sizes live in the tile menu, so an item Flow
+   *  doesn't show in the project grid (a reference image used in a prompt) is saved at original quality. */
+  function upscalable(it, settings) { return wantsUpscale(it.kind, settings) && it.inGrid !== false; }
   function anyUpscale(settings) { return settings.quality === 'upscaled' || settings.videoQuality === 'upscaled'; }
   /** Rough duration of a run over these items with the current pacing, in ms. */
   function estimateRunMs(items, settings, avgUpscaleMs, avgVideoUpscaleMs) {
@@ -481,7 +485,7 @@
     const perUp = (avgUpscaleMs || 12000) + extra, perVideoUp = (avgVideoUpscaleMs || 45000) + extra;
     const perOrig = 1500 + delay;
     let ms = 0;
-    for (const it of items) ms += !wantsUpscale(it.kind, settings) ? perOrig : it.kind === 'video' ? perVideoUp : perUp;
+    for (const it of items) ms += !upscalable(it, settings) ? perOrig : it.kind === 'video' ? perVideoUp : perUp;
     return ms;
   }
   function fmtDuration(ms) {
@@ -496,16 +500,26 @@
     const n = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
     if (anyUpscale(settings)) {
       const how = (kind, size) => (wantsUpscale(kind, settings) ? `would be upscaled to ${size}` : 'saved at original quality');
-      return [pics ? `${n(pics, 'picture')} ${how('image', settings.imageUpscale)}` : '', vids ? `${n(vids, 'video')} ${how('video', settings.videoUpscale)}` : ''].filter(Boolean).join(', ');
+      // items Flow's grid doesn't show can't be upscaled (see upscalable)
+      const hidden = items.filter((i) => i.inGrid === false && wantsUpscale(i.kind, settings)).length;
+      const hp = items.filter((i) => i.inGrid === false && i.kind === 'image' && wantsUpscale(i.kind, settings)).length, hv = hidden - hp;
+      return [pics - hp ? `${n(pics - hp, 'picture')} ${how('image', settings.imageUpscale)}` : '', vids - hv ? `${n(vids - hv, 'video')} ${how('video', settings.videoUpscale)}` : '',
+        hidden ? `${n(hidden, hv ? 'item' : 'picture')} not in the grid saved at original quality` : ''].filter(Boolean).join(', ');
     }
     return `${[pics ? n(pics, 'picture') : '', vids ? n(vids, 'video') : ''].filter(Boolean).join(' and ')} would be downloaded`;
+  }
+
+  /** A small thumbnail for the picker: Flow's poster URLs take a size after "=" (=s0 is full size). */
+  function thumbUrl(item) {
+    const u = ((item.urls && item.urls.poster) || []).find((x) => /googleusercontent\.com\/asb\//.test(x));
+    return u ? u.split('=')[0] + '=s96' : '';
   }
 
   const helpers = {
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, anyUpscale, pickUpscaleSize, doneKey,
+    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, upscalable, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -523,7 +537,7 @@
     sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true,
     keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeNotInGrid: false,
     // quality
-    quality: 'original', imageUpscale: '2K', videoQuality: 'original', videoUpscale: '1080p', upscaleLabel: 'Upscal', fallbackOriginal: true, upscaleTimeoutSec: 120,
+    quality: 'original', imageUpscale: '2K', videoQuality: 'original', videoUpscale: '1080p', upscaleLabel: 'Upscal', fallbackOriginal: false, upscaleTimeoutSec: 120,
     upscalePauseSec: 8, maxUpscalesPerRun: 0, dailyUpscaleCap: 0, onLimit: 'stop', limitPauseHours: 24,
     // projects
     scope: 'current', selectedProjects: [], extraProjects: '',
@@ -531,7 +545,7 @@
     downloadMode: 'browser', subfolder: 'Flow Export', folderByProject: true, folderByMonth: false, namePattern: 'date-title-id',
     sidecar: 'none', manifestPerRun: true, allowPosterFallback: false, delayMs: 400,
     // automation
-    autoMinutes: 0, runOnLoadHours: 0, autoProjectId: '', notify: true,
+    autoMinutes: 0, runOnLoadHours: 0, autoProjectId: '', notify: true, showFab: true,
     // learn / advanced
     learnMode: false, rpcListing: 'Zzl0ze', rpcListingAlt: 'ngNC2', rpcMedia: 'as29s', rpcCredits: 'nzlxg',
     rpcUpscaleIds: 'SPrCad,p0UkFb', downloadLabel: 'Download', optionsLabel: 'option|more|menu|opcion|más|mehr|plus|autres|altro|mais',
@@ -977,7 +991,7 @@
   async function jumpToTile(item, sc) {
     const g = gridIndexFor(currentProjectId());
     const target = g && g.ranks.get(item.mediaId);
-    if (target == null) return { tile: null };
+    if (target == null) return { tile: null, absent: !!(g && g.ranks.size && item.inGrid === false) };
     let bracketed = 0;
     for (let step = 0; step < 12 && !stopFlag; step++) {
       const tile = findTileNow(item);
@@ -1301,8 +1315,9 @@
         if (until != null && it.createdMs > until) { out.skippedDate++; continue; }
       }
       if (settings.skipDone && !opts.ignoreDone) {
-        const wantUp = wantsUpscale(kind, settings);
-        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))]) { out.skippedDone++; continue; }
+        const wantUp = upscalable(it, settings);
+        const orig = done[doneKey(it.mediaId, false)];
+        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))] || (wantUp && orig && orig.noUpscale)) { out.skippedDone++; continue; }
       }
       out.keep.push(it);
     }
@@ -1357,6 +1372,11 @@
       const s = await scan(settings, log);
       const f = filterItems(s.items, settings);
       let keep = f.keep;
+      if (opts.exclude && opts.exclude.size) {
+        const n0 = keep.length;
+        keep = keep.filter((i) => !opts.exclude.has(i.mediaId));
+        if (keep.length < n0) log(`Leaving out ${n0 - keep.length} item(s) you unticked in the list.`);
+      }
       if (opts.limit) keep = keep.slice(-opts.limit); // newest first for a test run
       log(`${opts.limit ? 'TEST RUN — ' : ''}Matched ${f.keep.length} item(s)${opts.limit ? `, processing ${keep.length}` : ''}. Skipped: ${skipSummary(f)}.`);
       ui.renderItems(keep);
@@ -1367,7 +1387,7 @@
       if (upMode) {
         const cur = currentProjectId();
         if (!cur) log('Upscaled mode needs a project page open in this tab; items to upscale will be deferred.');
-        else if (keep.some((i) => wantsUpscale(i.kind, settings) && i.projectId && i.projectId.toLowerCase() !== cur)) log('Upscaled mode can only drive the grid of the project open in this tab; items from other projects are deferred.');
+        else if (keep.some((i) => upscalable(i, settings) && i.projectId && i.projectId.toLowerCase() !== cur)) log('Upscaled mode can only drive the grid of the project open in this tab; items from other projects are deferred.');
         const what = [settings.quality === 'upscaled' && `pictures (preferring ${settings.imageUpscale})`, settings.videoQuality === 'upscaled' && `videos (preferring ${settings.videoUpscale})`].filter(Boolean).join(' and ');
         const plain = [settings.quality !== 'upscaled' && settings.images && 'Pictures', settings.videoQuality !== 'upscaled' && settings.videos && 'Videos'].filter(Boolean).join(' and ');
         log(`Upscaled mode: Flow will upscale ${what}, else the best size your plan allows, one at a time (pause ${settings.upscalePauseSec}s between).${plain ? ` ${plain} are saved at original quality.` : ''}`);
@@ -1390,7 +1410,7 @@
       for (let i = 0; i < keep.length; i++) {
         if (stopFlag) { log('Stopped.'); break; }
         const it = keep[i];
-        const needsUp = wantsUpscale(it.kind, settings);
+        const needsUp = upscalable(it, settings);
         if (needsUp && gridMissing) { deferred++; continue; }
         if (needsUp && upAllowed && settings.dailyUpscaleCap > 0 && upscalesLast24h() >= settings.dailyUpscaleCap) {
           const oldest = Math.min(...loadUpscaleLog().filter((t) => Date.now() - t < 86400000));
@@ -1407,7 +1427,7 @@
         }
         ui.progress(i, keep.length, it, { ok, fail, deferred });
         try {
-          let r, upscaleFailed = false;
+          let r, upscaleFailed = false, noUpscale = false;
           if (needsUp && upAllowed) {
             await waitForVisibleTab(log);
             if (stopFlag) continue;
@@ -1415,6 +1435,7 @@
             const attemptAt = Date.now();
             try {
               r = await uiDownloadUpscaled(it, settings, (size) => !!done[doneKey(it.mediaId, true, size)]);
+              if (!r.upscaled) { noUpscale = true; log(`  Flow's menu offers no upscaled sizes for ${it.mediaId.slice(0, 8)} (e.g. an uploaded picture); saved at original quality and counted as done`); }
               if (r.upscaled) {
                 upscalesDone++; recordUpscale(); upFailStreak = 0;
                 const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
@@ -1459,7 +1480,7 @@
           }
           try { await writeSidecar(it, r, settings); } catch (e) { log(`  sidecar failed: ${e.message}`); }
           ok++; failStreak = 0;
-          done[doneKey(it.mediaId, !!r.upscaled, r.size)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed };
+          done[doneKey(it.mediaId, !!r.upscaled, r.size)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed, noUpscale };
           saveDone(done);
           rows.push({
             savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '',
@@ -1505,7 +1526,7 @@
     const done = loadDone();
     let n = 0;
     for (const it of f.keep) {
-      const up = wantsUpscale(it.kind, settings);
+      const up = upscalable(it, settings);
       const k = doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
       if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: up, upscaleFailed: false, manual: true }; n++; }
     }
@@ -1718,6 +1739,12 @@
         .log { background:#111; border:1px solid var(--line); border-radius:6px; padding:6px; margin-top:6px; height:160px; overflow:auto; font-family: ui-monospace, Consolas, monospace; font-size:11.5px; white-space:pre-wrap; }
         .items { max-height:170px; overflow:auto; font-size:12px; margin-top:6px; }
         .items div { padding:2px 0; border-bottom:1px solid #2a2b2e; }
+        .items.picking { max-height:300px; }
+        .items .pick { display:flex; align-items:center; gap:8px; padding:3px 0; border-bottom:1px solid #2a2b2e; cursor:pointer; }
+        .items .pick input { flex:none; margin:0; }
+        .items .pick img, .items .pick .noimg { width:36px; height:36px; flex:none; object-fit:cover; border-radius:4px; background:var(--field); }
+        .items .pick.off { opacity:.45; }
+        .items .pickBar { position:sticky; top:0; z-index:1; display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:var(--bg); padding:2px 0 6px; border-bottom:none; }
         .projects { max-height:120px; overflow:auto; }
         .projects label { display:flex; }
         .muted { color:var(--muted); }
@@ -1807,7 +1834,7 @@
               </div>
               <div class="row grid">
                 <label><input type="checkbox" id="excludeUploads"> Leave out my uploaded reference images (experimental)</label>
-                <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts)</label>
+                <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts; always saved at original quality)</label>
               </div>
             </details>
 
@@ -1884,6 +1911,14 @@
                 <label><input type="checkbox" id="notify"> Desktop notifications</label>
               </div>
               <div class="note">For unattended daily runs, schedule Chrome to open Flow each morning (see <code>schedule/Register-FlowTask.ps1</code> in the repo) and set "Run on page load". On the home page the auto project is opened first so Upscaled mode has a grid to work with.</div>
+            </details>
+
+            <details>
+              <summary>Panel <span class="sum" id="sumPanel"></span></summary>
+              <div class="row grid">
+                <label><input type="checkbox" id="showFab"> Show the round ⬇ Flow Export button</label>
+              </div>
+              <div class="note"><b>Alt+Shift+F</b> opens and closes the panel at any time, and Tampermonkey's menu (its icon in Chrome's toolbar) has <b>Open Flow Export</b>. With the button hidden, the small run card still shows during downloads.</div>
             </details>
           </section>
 
@@ -1980,7 +2015,7 @@
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
       extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',
       sidecar: 'sidecar', manifestPerRun: 'manifestPerRun', allowPosterFallback: 'poster', delayMs: 'delay',
-      autoMinutes: 'auto', runOnLoadHours: 'runOnLoad', autoProjectId: 'autoProject', notify: 'notify', learnMode: 'learnMode',
+      autoMinutes: 'auto', runOnLoadHours: 'runOnLoad', autoProjectId: 'autoProject', notify: 'notify', showFab: 'showFab', learnMode: 'learnMode',
       rpcListing: 'rpcListing', rpcListingAlt: 'rpcListingAlt', rpcMedia: 'rpcMedia', rpcCredits: 'rpcCredits', rpcUpscaleIds: 'rpcUpscale', downloadLabel: 'downloadLabel', optionsLabel: 'optionsLabel',
     };
     const NUMERIC = { upscaleTimeoutSec: [10, 120], upscalePauseSec: [0, 8], maxUpscalesPerRun: [0, 0], dailyUpscaleCap: [0, 0], limitPauseHours: [1, 24], delayMs: [0, 400], autoMinutes: [0, 0], runOnLoadHours: [0, 0] };
@@ -2005,6 +2040,7 @@
       settings.autoProjectId = m ? m[0].toLowerCase() : '';
       saveSettings(settings);
       $('download').textContent = 'Download'; // a scan's count no longer applies
+      if (excluded.size) $('download').textContent = `Download (${excluded.size} unticked left out)`;
       if (settings.learnMode) installLearnHooks();
       scheduleAuto();
       renderStatus();
@@ -2086,19 +2122,78 @@
       if (settings.autoMinutes > 0) a.push(`every ${settings.autoMinutes} min`);
       if (settings.runOnLoadHours > 0) a.push(`on load after ${settings.runOnLoadHours} h`);
       $('sumAuto').textContent = a.join(' · ') || 'off';
+      $('sumPanel').textContent = settings.showFab === false ? 'button hidden · Alt+Shift+F' : 'button shown · Alt+Shift+F';
     }
     function renderLearned() {
       const l = loadLearned();
       const keys = Object.keys(l).filter((k) => k !== 'at');
       $('learnedBox').textContent = keys.length ? keys.map((k) => `${k}: ${Array.isArray(l[k]) ? l[k].join(', ') : l[k]}`).join('\n') + (l.at ? `\n(observed ${fmtHuman(l.at)})` : '') : (settings.learnMode ? 'Learning… open a project, hover a picture, open its menu and download it once by hand, then click "Refresh learned".' : 'Nothing learned yet. Turn on "Learn from my clicks" first.');
     }
-    function renderItems(items) {
+    // Items unticked in the list after a Scan; the next Download or Test leaves them out.
+    // They are not marked as done, so they show up again in the next scan.
+    const excluded = new Set();
+    let listed = [];
+    const PICK_MAX = 5000;
+    function renderItems(items, pickable) {
       const el = $('items');
-      $('itemsHead').textContent = `Matching items (${items.length})`;
-      if (!items.length) { setHTML(el, '<span class="muted">No matching items.</span>'); return; }
-      setHTML(el, items.slice(0, 300).map((i) => `<div>${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + escapeHtml(i.model) : ''} · ${escapeHtml(i.title || '(untitled)')} <span class="muted">${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}</span></div>`).join('') +
-        (items.length > 300 ? `<div class="muted">…and ${items.length - 300} more</div>` : ''));
+      listed = items;
+      el.classList.toggle('picking', !!pickable);
+      if (!items.length) { $('itemsHead').textContent = 'Matching items (0)'; setHTML(el, '<span class="muted">No matching items.</span>'); return; }
+      const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+      const kids = [];
+      if (pickable) {
+        const bar = mk('div', 'pickBar');
+        for (const [id, t] of [['pickAll', 'Tick all'], ['pickNone', 'Untick all']]) { const b = mk('button', 'link', t); b.id = id; b.type = 'button'; bar.append(b); }
+        bar.append(mk('span', 'muted', 'Untick what you don\'t want; Shift-click ticks or unticks a range.'));
+        kids.push(bar);
+      }
+      items.slice(0, PICK_MAX).forEach((i, n) => {
+        const row = mk(pickable ? 'label' : 'div', 'pick');
+        if (pickable) {
+          const cb = mk('input'); cb.type = 'checkbox'; cb.dataset.n = n; cb.checked = !excluded.has(i.mediaId); cb.disabled = locked;
+          row.classList.toggle('off', !cb.checked);
+          row.append(cb);
+        }
+        const src = thumbUrl(i);
+        if (src) { const img = mk('img'); img.loading = 'lazy'; img.alt = ''; img.onerror = () => img.replaceWith(mk('span', 'noimg')); img.src = src; row.append(img); } else row.append(mk('span', 'noimg'));
+        const txt = mk('span', '', `${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + i.model : ''} · ${i.title || '(untitled)'} `);
+        txt.append(mk('span', 'muted', `${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}${i.inGrid === false ? ' · not in the grid' : ''}`));
+        row.append(txt);
+        kids.push(row);
+      });
+      if (items.length > PICK_MAX) kids.push(mk('div', 'muted', `…and ${items.length - PICK_MAX} more${pickable ? ' (always included)' : ''}`));
+      el.replaceChildren(...kids);
+      renderPickCount(pickable);
     }
+    function renderPickCount(pickable) {
+      const n = listed.length, on = n - listed.filter((i) => excluded.has(i.mediaId)).length;
+      $('itemsHead').textContent = pickable && on < n ? `Matching items (${on} of ${n} ticked)` : `Matching items (${n})`;
+      if (pickable) $('download').textContent = on ? `Download ${on}` : 'Download';
+    }
+    let lastPick = -1;
+    $('items').addEventListener('click', (ev) => {
+      const b = ev.target.closest('button');
+      if (b && (b.id === 'pickAll' || b.id === 'pickNone')) {
+        const on = b.id === 'pickAll';
+        for (const i of listed) { if (on) excluded.delete(i.mediaId); else excluded.add(i.mediaId); }
+        for (const cb of $('items').querySelectorAll('input[type=checkbox]')) { cb.checked = on; cb.closest('.pick').classList.toggle('off', !on); }
+        renderPickCount(true);
+        return;
+      }
+      const cb = ev.target.closest('input[type=checkbox]');
+      if (!cb) return;
+      const n = +cb.dataset.n, on = cb.checked;
+      const from = ev.shiftKey && lastPick >= 0 ? Math.min(lastPick, n) : n, to = ev.shiftKey && lastPick >= 0 ? Math.max(lastPick, n) : n;
+      const boxes = $('items').querySelectorAll('input[type=checkbox]');
+      for (let k = from; k <= to; k++) {
+        const it = listed[k], box = boxes[k];
+        if (!it || !box) continue;
+        box.checked = on; box.closest('.pick').classList.toggle('off', !on);
+        if (on) excluded.delete(it.mediaId); else excluded.add(it.mediaId);
+      }
+      lastPick = n;
+      renderPickCount(true);
+    });
     let prog = null, act = null, actTimer = null, runStartAt = 0;
     function setLines(el, lines) {
       el.replaceChildren(...lines.map(([cls, text]) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }));
@@ -2184,7 +2279,7 @@
       view = v;
       panel.classList.toggle('on', v === 'open');
       $('mini').classList.toggle('on', v === 'mini');
-      $('fab').classList.toggle('on', v === 'closed');
+      $('fab').classList.toggle('on', v === 'closed' && settings.showFab !== false);
       if (v === 'open') { $('fabBadge').hidden = true; renderProjects(); renderLearned(); renderStatus(); }
       fitToViewport();
     }
@@ -2260,6 +2355,12 @@
     });
     $('close').addEventListener('click', () => setView(running && compactRun ? 'mini' : 'closed'));
     $('minimize').addEventListener('click', () => setView('mini'));
+    $('showFab').addEventListener('change', () => setView(view));
+    function togglePanel() { setView(view === 'open' ? (running && compactRun ? 'mini' : 'closed') : 'open'); }
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyF') { e.preventDefault(); e.stopPropagation(); togglePanel(); }
+    }, true);
+    try { if (typeof GM_registerMenuCommand === 'function') GM_registerMenuCommand('Open Flow Export', () => setView('open')); } catch (e) { /* ignore */ }
     $('expand').addEventListener('click', () => setView('open'));
     $('mStop').addEventListener('click', requestStop);
     $('popupTip').hidden = !!store.get('fbd.hidePopupTip', false);
@@ -2284,15 +2385,17 @@
         const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0)))} at the current pacing)` : '';
         setBar(null);
         finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}${est}.\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
-        renderItems(f.keep);
+        excluded.clear(); lastPick = -1;
+        renderItems(f.keep, true);
         $('itemsBox').open = f.keep.length > 0;
-        $('download').textContent = f.keep.length ? `Download ${f.keep.length}` : 'Download';
         try { $('itemsBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
       } catch (e) { log(`Error: ${e.message}`); finish(`Error: ${e.message}`); }
       finally { running = false; setRunning(false); }
     });
-    $('download').addEventListener('click', () => { readForm(); setRunning(true, true); runDownload(settings, ui); });
-    $('test1').addEventListener('click', () => { readForm(); setRunning(true, true); runDownload(settings, ui, { limit: 1 }); });
+    // A run lists what it works on (without checkboxes), so the picks apply to this one run.
+    const takePicks = () => { const ex = new Set(excluded); excluded.clear(); return ex; };
+    $('download').addEventListener('click', () => { readForm(); const exclude = takePicks(); setRunning(true, true); runDownload(settings, ui, { exclude }); });
+    $('test1').addEventListener('click', () => { readForm(); const exclude = takePicks(); setRunning(true, true); runDownload(settings, ui, { limit: 1, exclude }); });
     $('stop').addEventListener('click', requestStop);
     $('resetLimit').addEventListener('click', () => { store.set('fbd.upscaleLimitAt', 0); renderStatus(); log('Upscale limit pause reset.'); });
     $('refreshLearned').addEventListener('click', () => { if (!settings.learnMode) { log('Turn on "Learn from my clicks" first.'); return; } learnedNow(); renderLearned(); log('Learned values refreshed from what the page did since Learn mode was enabled.'); });

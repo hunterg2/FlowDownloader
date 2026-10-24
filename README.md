@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.11**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.12**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -88,8 +88,10 @@ This is the quick way. It saves the files exactly as Flow stores them, usually a
 3. Tick **Pictures**, **Videos** or both. Leave **Skip already saved** ticked.
 4. Set the **Pictures** and **Videos** quality switches to **Original**.
 5. Click **Scan**. Nothing is downloaded: it shows how many items match and roughly how long
-   they would take, and lists them under **Matching items**. The Download button now shows the
-   count, for example **Download 42**.
+   they would take, and lists them with thumbnails under **Matching items**. The Download
+   button now shows the count, for example **Download 42**. **Untick any you don't want**
+   (Shift-click to untick a range, or **Untick all** and tick just a few); the next Download or
+   Test 1 leaves them out. Unticked items aren't marked as done, so they show up in the next scan.
 6. Click **Test 1**. It saves just the newest matching item, so you can check it lands where
    you expect. The first time, Chrome asks whether this site may **download multiple files**:
    click **Allow**.
@@ -134,9 +136,13 @@ Good to know:
   Upscaling → On the daily limit**) and upscaling pauses for 24 hours. The top strip shows how
   many upscales you've done in the last 24 hours. If you know your limit, enter it as the
   **Daily cap** and the script stops just before it.
-- If an upscale fails, the original is saved meanwhile, so you still get the picture or video.
-  It stays queued, and the next upscaled run tries the upscale again (without saving the
-  original twice).
+- If an upscale fails, the item is counted as failed and stays queued for the next run. Tick
+  **If an upscale fails, save the original meanwhile** (Options → Upscaling, off by default) to
+  get the original in the meantime; the next upscaled run still tries the upscale again (without
+  saving the original twice).
+- **Some pictures can't be upscaled**: reference images used in prompts (they aren't in the
+  project grid, where Flow's upscale menu is) and uploads whose menu offers only a plain
+  Download. These are saved at original quality and count as done, so later 2K runs skip them.
 - Flow doesn't always say clearly that the limit is reached, so **two failed upscales in a
   row**, or upscale entries greyed out in Flow's menu, also count as the daily limit.
 - An item it couldn't reach (for example because the page was busy) is **deferred**:
@@ -169,6 +175,9 @@ Good to know:
 - **Move it** by dragging its header, or drag the round **⬇ Flow Export** button itself. It
   remembers where you put it; double-click the panel's header to put it back in the corner.
   **✕** closes it to the round button; a running download keeps going.
+- **Alt+Shift+F** opens and closes the panel, and Tampermonkey's menu (its icon in Chrome's
+  toolbar) has **Open Flow Export**. To hide the round button, untick **Show the round ⬇ Flow
+  Export button** under **Options → Panel**.
 
 ## FAQ
 
@@ -186,10 +195,12 @@ quality you picked**. The quality is also in the file name (`[2K Upscaled]`) and
 manifest's quality column.
 
 **I picked 2K but some pictures were saved at original quality. Why?**
-When an upscale fails, the script saves the original meanwhile so you still get the picture
-(**If an upscale fails, save the original meanwhile**, Options → Upscaling; untick it if you'd
-rather get nothing). Those pictures aren't marked as done for 2K: the next 2K run tries the
-upscale again, without saving the original a second time. Two failed upscales in a row are
+Usually because Flow can't upscale them: reference images used in prompts (shown only with
+**Include pictures not shown in the project grid**) and uploads whose menu has no 2K option.
+The log says so for each one, and they count as done. The other reason is **If an upscale
+fails, save the original meanwhile** (Options → Upscaling, off by default): with it ticked, a
+failed upscale saves the original instead. Those pictures aren't marked as done for 2K: the
+next 2K run tries the upscale again, without saving the original a second time. Two failed upscales in a row are
 taken as Flow's daily limit, and then **On the daily limit** decides what happens: **stop the
 run** stops straight away, **continue with originals** saves the rest at original quality and
 keeps them queued for 2K.
@@ -345,7 +356,7 @@ uploaded reference images** (experimental: skips items that have no generation r
 
 Only pictures shown in the project grid are downloaded by default. Flow's listing also contains
 the reference images used in prompts; tick **Include pictures not shown in the project grid** to
-save those too. **Include items with no date** adds items whose creation time can't be read.
+save those too (always at original quality: Flow can only upscale from the grid). **Include items with no date** adds items whose creation time can't be read.
 
 ### Upscaling settings
 
@@ -359,7 +370,7 @@ Under **Options → Upscaling**:
   24 hours.
 - **On the daily limit:** stop the run (default) or continue with originals, **and pause
   upscaling for** N hours (default 24). **Reset limit pause** overrides it.
-- **If an upscale fails, save the original meanwhile** (on by default). The item stays queued
+- **If an upscale fails, save the original meanwhile** (off by default). The item stays queued
   for upscaling. Two failed upscales in a row count as the daily limit.
 - Three failures in a row pause two minutes; six stop the run.
 

@@ -110,6 +110,8 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
       if (isVideo) records.push([wf, pid, mediaId, null, null, details(i), null, [[null,null,null,null,null,null,null,null, 'https://flow-content.google/video/' + wf + '?Expires=1&Signature=s', null,null,null,'abra_r2v_8s']]]);
       else records.push([wf, pid, mediaId, null, null, details(i, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=1&Signature=s' }), null]);
     }
+    // a reference image used in a prompt: generation record only, not in the grid
+    records.push([U(250), pid, U(150), null, null, details(50, { 5: 'https://flow-content.google/image/' + U(150) + '?Expires=1&Signature=s', 12: [Math.floor((now - DAY / 2) / 1000), 0] }), null]);
     // an uploaded reference image: asset entry only, no generation record
     entries.push([U(399), U(99), null, ['my-upload.png', [Math.floor((now - DAY) / 1000), 0], false, null, U(199), null, true], pid]);
     return [entries, records, 'token'];

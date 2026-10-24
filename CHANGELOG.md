@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.12 — 2026-10-24
+
+- **Pick items by hand.** After a Scan, Matching items lists every match with a thumbnail and a checkbox. Untick what you don't want (Shift-click for a range, or Untick all and tick a few); the next Download or Test 1 leaves those out, and the button shows the ticked count. Unticked items aren't marked as done.
+- **Hide the round button** (Options → Panel). **Alt+Shift+F** opens and closes the panel at any time, and Tampermonkey's menu has **Open Flow Export**.
+- **Fix: reference images made 2K runs crawl.** Pictures not in the project grid (shown with *Include pictures not shown in the project grid*) were searched for by scrolling the whole grid, one by one, before being deferred. Flow can only upscale from the grid, so they're now saved at original quality straight away and count as done for 2K runs.
+- **Fix: uploads re-downloaded on every 2K run.** When Flow's menu offers only a plain Download (no sizes), the original was saved silently and never counted as done for 2K. The log now says so, and the item counts as done.
+- **If an upscale fails, save the original meanwhile** is now off by default (existing installs keep their setting).
+- The Scan summary says how many matches can't be upscaled.
+
 ## 0.3.11 — 2026-10-24
 
 - **The round ⬇ Flow Export button can be dragged too.** Drag it anywhere; a plain click still opens the panel. It shares its spot with the panel and the run card.

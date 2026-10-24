@@ -335,6 +335,10 @@ test('pictures and videos each have their own quality', () => {
   assert.equal(H.doneKey('m1', true, '1080p'), 'm1|up');
   assert.equal(H.doneKey('m1', true, ''), 'm1|up');
   assert.equal(H.doneKey('m1', true, '4 K'), 'm1|up:4k');
+  assert.equal(H.upscalable({ kind: 'image' }, both), true);
+  assert.equal(H.upscalable({ kind: 'image', inGrid: false }, both), false); // a reference image Flow's grid doesn't show
+  assert.equal(H.thumbUrl({ urls: { poster: ['https://lh3.googleusercontent.com/asb/TK1X=s256'] } }), 'https://lh3.googleusercontent.com/asb/TK1X=s96');
+  assert.equal(H.thumbUrl({ urls: { poster: [] } }), '');
   const items = [{ kind: 'image' }, { kind: 'video' }, { kind: 'video' }];
   assert.equal(H.describeMatches(items, both), '1 picture would be upscaled to 2K, 2 videos would be upscaled to 1080p');
   assert.equal(H.describeMatches(items, vidsOnly), '1 picture saved at original quality, 2 videos would be upscaled to 1080p');
