@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.5 — 2026-10-23
+
+- **Upscaled mode no longer re-scrolls the whole grid for every picture.** Flow's grid is virtual and sorted newest first by a timestamp in the listing, so the script jumps straight to where each picture should be and corrects from the tiles on screen (on a real 5,500-tile project every test picture was found within two jumps, in 1–6 s). Pictures Flow does not show in the grid are recognised quickly instead of after a full sweep; the full sweep remains only as a fallback.
+- **Live activity line** under the buttons: which picture is being worked on, the current step ("Scrolling the grid to it", "Flow is upscaling to 2K… 6 s", "Waiting before the next picture… 5 s left", "⏸ Paused"), and about how long the run has left.
+- **Scan (dry run) shows a clear summary** under the buttons (what would be downloaded or upscaled, a time estimate, what was skipped) and scrolls to the list of matching items, now headed with its count.
+- The panel header shows the installed version (it always said v0.3.0).
+
 ## 0.3.4 — 2026-10-23
 
 - **Upscaled runs pause while the Flow tab is hidden** instead of deferring every picture. The log shows "⏸ Paused: the Flow tab is hidden" and the run carries on when you switch back; a picture interrupted by switching away is retried, not deferred.

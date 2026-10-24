@@ -286,4 +286,36 @@ test('a multi-megabyte listing parses in reasonable time', () => {
   assert.ok(dt < 15000, `too slow: ${dt} ms`);
 });
 
+
+test('gridRanks orders the open project grid items newest first by the grid timestamp', () => {
+  const items = [
+    { mediaId: 'a', projectId: 'P', inGrid: true, gridMs: 100, createdMs: 900 },
+    { mediaId: 'b', projectId: 'P', inGrid: true, gridMs: 300, createdMs: 100 },
+    { mediaId: 'c', projectId: 'P', inGrid: false, gridMs: 500 },
+    { mediaId: 'd', projectId: 'Q', inGrid: true, gridMs: 400 },
+    { mediaId: 'e', projectId: 'P', inGrid: true, createdMs: 200 },
+  ];
+  const r = H.gridRanks(items, 'p');
+  assert.deepEqual([...r.entries()], [['b', 0], ['e', 1], ['a', 2]]);
+});
+
+test('extractItems keeps the grid timestamp from asset entries', () => {
+  const SEC = 1787767332;
+  const payload = [null, [[U(1), null, null, ['t', [SEC, 0], null, null, U(2), U(3), [SEC + 50, 5000000]], U(7)]]];
+  const { items } = H.extractItems(payload);
+  assert.equal(items[0].gridMs, (SEC + 50) * 1000 + 5);
+});
+
+test('run estimate, duration text and match description', () => {
+  const st = { quality: 'upscaled', imageUpscale: '2K', upscalePauseSec: 8, delayMs: 1000 };
+  const items = [{ kind: 'image' }, { kind: 'image' }, { kind: 'video' }];
+  assert.equal(H.estimateRunMs(items, st, 10000), 2 * (10000 + 3000 + 8000 + 1000) + 2500);
+  assert.equal(H.fmtDuration(20000), 'under a minute');
+  assert.equal(H.fmtDuration(47 * 60000), '47 min');
+  assert.equal(H.fmtDuration(125 * 60000), '2 h 5 min');
+  assert.equal(H.describeMatches(items, st), '2 pictures would be upscaled to 2K, 1 video saved at original quality');
+  assert.equal(H.describeMatches([{ kind: 'image' }], { quality: 'original' }), '1 picture would be downloaded');
+  assert.equal(H.describeMatches([], st), 'Nothing matches');
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

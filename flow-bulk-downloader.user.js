@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.4
+// @version      0.3.5
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = '0.3.0';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.5';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -232,6 +232,7 @@
       // extractItems() lets the generation record's kind win and keeps this only as a fallback.
       kind: d[2] === true ? 'video' : (d[2] === false ? 'image' : null),
       done: d[6],
+      gridMs: tsPairMs(d[6]), // the project grid is sorted newest first by this
       urls: splitUrls(collectUrls(n)),
     };
   }
@@ -459,10 +460,45 @@
     return out;
   }
 
+  /** Flow's project grid shows tiles newest first by the entry's second timestamp (gridMs;
+   *  verified on a 5,500-tile project, 2026-10). Returns mediaId -> position in that order. */
+  function gridRanks(items, projectId) {
+    const pid = projectId ? projectId.toLowerCase() : null;
+    const list = items.filter((i) => i.inGrid !== false && (!pid || !i.projectId || i.projectId.toLowerCase() === pid));
+    const key = (i) => (i.gridMs != null ? i.gridMs : (i.createdMs || 0));
+    list.sort((a, b) => key(b) - key(a));
+    return new Map(list.map((i, n) => [i.mediaId, n]));
+  }
+  /** Rough duration of a run over these items with the current pacing, in ms. */
+  function estimateRunMs(items, settings, avgUpscaleMs) {
+    const delay = Math.max(0, settings.delayMs || 0);
+    const perUp = (avgUpscaleMs || 12000) + 3000 + Math.max(0, settings.upscalePauseSec || 0) * 1000 + delay;
+    const perOrig = 1500 + delay;
+    let ms = 0;
+    for (const it of items) ms += settings.quality === 'upscaled' && it.kind === 'image' ? perUp : perOrig;
+    return ms;
+  }
+  function fmtDuration(ms) {
+    const min = Math.round(Math.max(0, ms) / 60000);
+    if (min < 1) return 'under a minute';
+    if (min < 60) return `${min} min`;
+    return `${Math.floor(min / 60)} h ${min % 60} min`;
+  }
+  function describeMatches(items, settings) {
+    if (!items.length) return 'Nothing matches';
+    const vids = items.filter((i) => i.kind === 'video').length, pics = items.length - vids;
+    const n = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+    if (settings.quality === 'upscaled') {
+      return [pics ? `${n(pics, 'picture')} would be upscaled to ${settings.imageUpscale}` : '', vids ? `${n(vids, 'video')} saved at original quality` : ''].filter(Boolean).join(', ');
+    }
+    return `${[pics ? n(pics, 'picture') : '', vids ? n(vids, 'video') : ''].filter(Boolean).join(' and ')} would be downloaded`;
+  }
+
   const helpers = {
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
+    gridRanks, estimateRunMs, fmtDuration, describeMatches,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -649,6 +685,10 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let stopFlag = false;
+  // Live "what is it doing now" line under the panel buttons; mountUI() replaces this no-op.
+  // opts.untilMs shows a countdown instead of the time spent so far.
+  let activity = () => {};
+  const AVG_UP_KEY = 'fbd.avgUpscaleMs';
   async function pacedSleep(ms) { const end = Date.now() + ms; while (Date.now() < end && !stopFlag) await sleep(Math.min(250, end - Date.now())); }
 
   // Flow only draws its grid while the tab is visible and Chrome throttles hidden tabs, so an
@@ -659,6 +699,7 @@
   async function waitForVisibleTab(log) {
     if (!tabHidden() || stopFlag) return;
     log('⏸ Paused: the Flow tab is hidden. Switch back to it and the run carries on.');
+    activity('⏸ Paused: the Flow tab is hidden. Switch back to it to continue.');
     const t0 = Date.now();
     await new Promise((res) => {
       const check = () => {
@@ -880,26 +921,97 @@
     }
     return document.scrollingElement || document.documentElement;
   }
+  const nudgeScroll = (sc) => { try { sc.dispatchEvent(new PAGE.Event('scroll', { bubbles: false })); } catch (e) { /* ignore */ } };
+  const asbToken = (src) => { const m = String(src || '').match(/\/asb\/([^=?&/]+)/); return m ? m[1] : null; };
+  let gridCache = null;
+  function gridIndexFor(projectId) {
+    if (!lastScan) return null;
+    if (gridCache && gridCache.at === lastScan.at && gridCache.pid === projectId) return gridCache;
+    const ranks = gridRanks(lastScan.items, projectId);
+    const byToken = new Map();
+    for (const it of lastScan.items) {
+      const r = ranks.get(it.mediaId);
+      if (r != null) for (const t of posterTokens(it)) byToken.set(t, r);
+    }
+    gridCache = { at: lastScan.at, pid: projectId, ranks, byToken };
+    return gridCache;
+  }
+  /** Grid positions of the tiles currently drawn inside the scroller's viewport. */
+  function renderedRanks(sc, byToken) {
+    const isPage = sc === document.scrollingElement || sc === document.documentElement;
+    const top = isPage ? 0 : sc.getBoundingClientRect().top;
+    const out = [];
+    for (const img of document.querySelectorAll('img[src*="/asb/"]')) {
+      const r = byToken.get(asbToken(img.src));
+      if (r == null) continue;
+      const y = img.getBoundingClientRect().top - top + sc.scrollTop;
+      if (y > sc.scrollTop - 50 && y < sc.scrollTop + sc.clientHeight + 50) out.push({ r, y });
+    }
+    return out;
+  }
+  async function settleGrid(sc, byToken) {
+    let last = '', same = 0;
+    for (let k = 0; k < 20; k++) {
+      await sleep(150);
+      const sig = renderedRanks(sc, byToken).map((x) => x.r).join(',');
+      if (sig && sig === last) { if (++same >= 2) return; } else same = 0;
+      last = sig;
+    }
+  }
+  // Flow's grid is virtual (only ~100 tiles exist at a time), so jump to where the picture should
+  // be from its grid position, then correct using the positions of the tiles that got drawn.
+  async function jumpToTile(item, sc) {
+    const g = gridIndexFor(currentProjectId());
+    const target = g && g.ranks.get(item.mediaId);
+    if (target == null) return { tile: null };
+    let bracketed = 0;
+    for (let step = 0; step < 12 && !stopFlag; step++) {
+      const tile = findTileNow(item);
+      if (tile) return { tile };
+      const R = renderedRanks(sc, g.byToken);
+      let y;
+      if (!R.length) y = sc.scrollTop + sc.clientHeight * 0.5;
+      else {
+        // Tiles on both sides of it are drawn but it is not: Flow does not show it in the grid.
+        if (R.some((x) => x.r < target) && R.some((x) => x.r > target) && ++bracketed >= 2) return { tile: null, absent: true };
+        const rows = uniq(R.map((x) => Math.round(x.y))).sort((a, b) => a - b);
+        const pitch = rows.length > 1 ? (rows[rows.length - 1] - rows[0]) / (rows.length - 1) : sc.clientHeight / 3;
+        const cols = Math.max(...rows.map((t) => R.filter((x) => Math.round(x.y) === t).length));
+        let a = R[0];
+        for (const x of R) if (Math.abs(x.r - target) < Math.abs(a.r - target)) a = x;
+        const dRows = (target - a.r) / cols;
+        y = Math.abs(dRows) < 1.5 ? sc.scrollTop + Math.sign(dRows || 1) * sc.clientHeight * 0.4 : a.y + dRows * pitch - sc.clientHeight / 2;
+      }
+      sc.scrollTop = Math.max(0, y); nudgeScroll(sc);
+      await settleGrid(sc, g.byToken);
+    }
+    return { tile: findTileNow(item) };
+  }
   async function findTile(item) {
     let tile = findTileNow(item);
     if (tile) return tile;
     const anyTile = document.querySelector('img[src*="/asb/"]') || document.querySelector(TILE_SELECTOR);
     if (!anyTile) throw new UpscaleDeferError('no project grid is visible in this tab (open the project and keep the tab in the foreground)', true);
     const sc = scrollContainerOf(anyTile);
+    activity('Scrolling the grid to it…');
+    const j = await jumpToTile(item, sc);
+    if (j.tile) return j.tile;
+    if (j.absent) return null;
+    // Fallback when the grid order is unknown: sweep the whole grid from the top.
+    activity('Searching the whole grid for it…');
     const startTop = sc.scrollTop;
-    const nudge = () => { try { sc.dispatchEvent(new PAGE.Event('scroll', { bubbles: false })); } catch (e) { /* ignore */ } };
-    sc.scrollTop = 0; nudge(); await sleep(350);
+    sc.scrollTop = 0; nudgeScroll(sc); await sleep(350);
     let lastTop = -1, stalls = 0;
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 400 && !stopFlag; i++) {
       tile = findTileNow(item);
       if (tile) return tile;
       sc.scrollTop += Math.max(200, sc.clientHeight * 0.7);
-      nudge();
+      nudgeScroll(sc);
       await sleep(300);
       if (Math.abs(sc.scrollTop - lastTop) < 2) { if (++stalls >= 3) break; } else stalls = 0;
       lastTop = sc.scrollTop;
     }
-    sc.scrollTop = startTop; nudge();
+    sc.scrollTop = startTop; nudgeScroll(sc);
     return null;
   }
   function optionsRe(settings) { try { return new RegExp(settings.optionsLabel || DEFAULT_SETTINGS.optionsLabel, 'i'); } catch (e) { return new RegExp(DEFAULT_SETTINGS.optionsLabel, 'i'); } }
@@ -978,14 +1090,16 @@
   async function uiDownloadUpscaled(item, settings) {
     if (!currentProjectId()) throw new UpscaleDeferError('upscaled mode needs a project page open in this tab', true);
     if (item.projectId && item.projectId.toLowerCase() !== currentProjectId()) throw new UpscaleDeferError('belongs to another project; only the open project\'s grid can be driven');
+    activity('Finding its tile in the grid…');
     const tile = await findTile(item);
-    if (!tile) throw new UpscaleDeferError('tile not found in the grid (grid not fully loaded, or thumbnail did not match)');
+    if (!tile) throw new UpscaleDeferError('tile not found in the grid (Flow does not show it there, or the thumbnail did not match)');
     try { tile.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* ignore */ }
     await sleep(250);
     hoverEl(tile);
     const img = tile.querySelector('img'); if (img) hoverEl(img);
     const btn = await waitUntil(() => optionsButtonIn(tile, settings), 2500);
     if (!btn) throw new UpscaleDeferError('no options button appeared on the tile after hover');
+    activity('Opening its menu…');
     const before = new Set(visibleMenuItems());
     clickEl(btn);
     const menu = await waitUntil(() => { const v = visibleMenuItems().filter((m) => !before.has(m)); return v.length ? v : null; }, 3000);
@@ -1007,6 +1121,8 @@
         chosenText = textOf(chosen); upscaled = true;
         hoverEl(chosen); clickEl(chosen);
       }
+      const shownSize = (chosenText.match(/\d+\s*K/i) || [settings.imageUpscale])[0].replace(/\s+/g, '');
+      activity(upscaled ? `Flow is upscaling to ${shownSize}…` : 'Waiting for Flow\'s download…');
       const timeoutMs = Math.max(10, settings.upscaleTimeoutSec || 120) * 1000;
       const deadline = Date.now() + timeoutMs;
       let signal = null;
@@ -1024,6 +1140,8 @@
         if (upscaleCallsSince(t0, settings).length) { signal = 'rpc'; await capture.wait(5000); checkToasts(); break; }
       }
       pressEscape();
+      if (signal && upscaled) { const d = Date.now() - t0; const avg = store.get(AVG_UP_KEY, 0); store.set(AVG_UP_KEY, Math.round(avg ? avg * 0.7 + d * 0.3 : d)); }
+      if (signal) activity('Saving the file…');
       if (!signal) throw new UpscaleDeferError(`no completion signal within ${timeoutMs / 1000}s after choosing "${chosenText}" (Flow may still be working; the picture stays queued)`);
       const st = capture.state;
       const tag = chosenText.replace(/[^\w\s-]/g, '').trim();
@@ -1162,6 +1280,7 @@
     out.keep.sort((a, b) => (a.createdMs || 0) - (b.createdMs || 0));
     return out;
   }
+  function skipSummaryShort(f) { return 'skipped ' + (skipSummary(f).split(', ').filter((x) => !/^0 /.test(x)).join(', ') || 'nothing'); }
   function skipSummary(f) {
     const parts = [`${f.skippedDone} already downloaded`, `${f.skippedDate} outside date range`, `${f.skippedType} wrong type`, `${f.skippedUndated} undated`];
     if (f.skippedKeyword) parts.push(`${f.skippedKeyword} keyword`);
@@ -1178,6 +1297,7 @@
     for (const pid of ids) {
       if (stopFlag) break;
       log(`Listing project ${projectTitleFor(pid)} (${pid.slice(0, 8)})…`);
+      activity(`Listing project ${projectTitleFor(pid) || pid.slice(0, 8)}… (big projects take a few seconds)`);
       const r = await listProjectMedia(pid, settings, log);
       const dates = r.items.map((i) => i.createdMs).filter((x) => x != null);
       const range = dates.length ? `${fmtHuman(Math.min(...dates))} → ${fmtHuman(Math.max(...dates))}` : 'no dates found';
@@ -1211,7 +1331,7 @@
       if (opts.limit) keep = keep.slice(-opts.limit); // newest first for a test run
       log(`${opts.limit ? 'TEST RUN — ' : ''}Matched ${f.keep.length} item(s)${opts.limit ? `, processing ${keep.length}` : ''}. Skipped: ${skipSummary(f)}.`);
       ui.renderItems(keep);
-      if (!keep.length) return;
+      if (!keep.length) { ui.finish('Nothing to download: ' + skipSummaryShort(f) + '.'); return; }
       const upMode = settings.quality === 'upscaled';
       let upAllowed = upMode;
       const limitPauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
@@ -1263,7 +1383,12 @@
             const attemptAt = Date.now();
             try {
               r = await uiDownloadUpscaled(it, settings);
-              if (r.upscaled) { upscalesDone++; recordUpscale(); await pacedSleep(Math.max(0, settings.upscalePauseSec || 0) * 1000); }
+              if (r.upscaled) {
+                upscalesDone++; recordUpscale();
+                const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
+                if (pauseMs && i < keep.length - 1) activity('Waiting before the next picture so Flow is not rushed…', { untilMs: pauseMs });
+                await pacedSleep(pauseMs);
+              }
             } catch (e) {
               if (e && e.limit) {
                 hitLimit(e.message);
@@ -1285,6 +1410,7 @@
               }
             }
           } else {
+            activity(it.kind === 'video' ? 'Downloading the video…' : 'Downloading the original…');
             r = await downloadItem(it, settings, log);
           }
           try { await writeSidecar(it, r, settings); } catch (e) { log(`  sidecar failed: ${e.message}`); }
@@ -1302,11 +1428,10 @@
           log(`✘ ${it.mediaId.slice(0, 8)} ${fmtHuman(it.createdMs)}: ${e.message}`);
           rows.push({ savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '', created: it.createdMs != null ? new Date(it.createdMs).toISOString() : '', kind: it.kind, model: it.model || '', quality: '', file: '', bytes: '', status: 'failed: ' + e.message, flowSizeBytes: it.sizeBytes || '' });
           if (failStreak >= 6) { log('6 failures in a row — stopping this run so Flow is not hammered. Check the log / Diagnose, then run again.'); break; }
-          if (failStreak >= 3) { log('3 failures in a row — pausing 2 minutes before continuing.'); await pacedSleep(120000); }
+          if (failStreak >= 3) { log('3 failures in a row — pausing 2 minutes before continuing.'); activity('Pausing after 3 failures in a row…', { untilMs: 120000 }); await pacedSleep(120000); }
         }
         await pacedSleep(settings.delayMs);
       }
-      ui.progress(keep.length, keep.length, null);
       if (!opts.limit) store.set('fbd.lastRun', Date.now());
       if (rows.length) {
         const m = loadManifest(); m.push(...rows); saveManifest(m);
@@ -1316,10 +1441,13 @@
           try { await saveText(toCsv(rows, MANIFEST_COLUMNS), rel, settings, 'text/csv;charset=utf-8'); log(`Manifest saved: ${name}`); } catch (e) { log(`Manifest failed: ${e.message}`); }
         }
       }
-      log(`Done: ${ok} saved, ${fail} failed${upscalesDone ? `, ${upscalesDone} upscaled` : ''}${deferred ? `, ${deferred} deferred` : ''}.`);
+      const doneMsg = `Done: ${ok} saved, ${fail} failed${upscalesDone ? `, ${upscalesDone} upscaled` : ''}${deferred ? `, ${deferred} deferred` : ''}.`;
+      log(doneMsg);
+      ui.finish(stopFlag ? 'Stopped. ' + doneMsg : doneMsg, 1);
       if (!opts.limit && (ok || fail)) notifyUser(settings, 'Flow Bulk Downloader', `Done: ${ok} saved, ${fail} failed${deferred ? `, ${deferred} deferred` : ''}.`);
     } catch (e) {
       log(`Error: ${e.message}`);
+      ui.finish(`Error: ${e.message}`);
     } finally {
       running = false;
       ui.setRunning(false);
@@ -1658,6 +1786,7 @@
           <div class="muted">Google renames these with frontend builds. Use Learn mode to discover the current values, or send a Diagnose file.</div>
         </details>
 
+        <div class="muted" id="itemsHead">Matching items</div>
         <div class="items" id="items"><span class="muted">Scan to see matching items here.</span></div>
         <div class="log" id="log"></div>
       </div>
@@ -1753,20 +1882,52 @@
     }
     function renderItems(items) {
       const el = $('items');
+      $('itemsHead').textContent = `Matching items (${items.length})`;
       if (!items.length) { setHTML(el, '<span class="muted">No matching items.</span>'); return; }
       setHTML(el, items.slice(0, 300).map((i) => `<div>${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + escapeHtml(i.model) : ''} · ${escapeHtml(i.title || '(untitled)')} <span class="muted">${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}</span></div>`).join('') +
         (items.length > 300 ? `<div class="muted">…and ${items.length - 300} more</div>` : ''));
     }
+    let prog = null, act = null, actTimer = null, runStartAt = 0;
+    function renderProgress() {
+      const lines = [];
+      if (prog && prog.item) lines.push(`${prog.item.kind === 'video' ? 'Video' : 'Picture'} ${prog.i + 1} of ${prog.n} · ${prog.item.title || prog.item.mediaId.slice(0, 8)}`);
+      else if (prog && prog.text) lines.push(prog.text);
+      if (act) {
+        const now = Date.now();
+        const t = act.until ? ` ${Math.max(0, Math.ceil((act.until - now) / 1000))} s left` : (now - act.at >= 2000 ? ` ${Math.floor((now - act.at) / 1000)} s` : '');
+        lines.push(`→ ${act.text}${t}`);
+      }
+      if (prog && prog.item && prog.n - prog.i > 1) {
+        const left = prog.perMs * (prog.n - prog.i) - (Date.now() - prog.at);
+        const d = fmtDuration(left);
+        lines.push(`${d === 'under a minute' ? 'Less than a minute' : 'About ' + d} left (≈${Math.round(prog.perMs / 1000)} s per item)`);
+      }
+      $('progress').textContent = lines.join('\n');
+    }
+    activity = (text, opts) => {
+      act = text ? { text, at: Date.now(), until: opts && opts.untilMs ? Date.now() + opts.untilMs : 0 } : null;
+      if (act && !actTimer) actTimer = setInterval(renderProgress, 1000);
+      if (!act && actTimer) { clearInterval(actTimer); actTimer = null; }
+      renderProgress();
+    };
     function progress(i, n, item) {
       $('barfill').style.width = n ? `${Math.round((i / n) * 100)}%` : '0%';
-      $('progress').textContent = item ? `Downloading ${i + 1} / ${n}: ${fmtHuman(item.createdMs)} ${item.title || item.mediaId.slice(0, 8)}` : (n ? `Finished ${i} / ${n}` : '');
+      if (i === 0 || !runStartAt) runStartAt = Date.now();
+      const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0));
+      prog = item ? { i, n, item, perMs, at: Date.now() } : null;
+      renderProgress();
+    }
+    function finish(text, frac) {
+      if (frac != null) $('barfill').style.width = `${Math.round(frac * 100)}%`;
+      prog = { text }; runStartAt = 0;
+      activity(null);
     }
     function setRunning(on) {
       for (const id of ['scan', 'download', 'test1', 'markDone']) $(id).disabled = on;
       $('stop').disabled = !on;
       renderStatus();
     }
-    const ui = { log, renderItems, progress, setRunning };
+    const ui = { log, renderItems, progress, setRunning, finish };
 
     $('fab').addEventListener('click', () => { panel.classList.toggle('open'); if (panel.classList.contains('open')) { renderProjects(); renderLearned(); renderStatus(); } });
     $('close').addEventListener('click', () => panel.classList.remove('open'));
@@ -1781,13 +1942,17 @@
         const s = await scan(settings, log);
         const f = filterItems(s.items, settings);
         log(`Would download ${f.keep.length} item(s). Skipped: ${skipSummary(f)}.`);
+        const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0)))} at the current pacing)` : '';
+        $('barfill').style.width = '0%';
+        finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}${est}.\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
         renderItems(f.keep);
-      } catch (e) { log(`Error: ${e.message}`); }
+        try { $('items').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+      } catch (e) { log(`Error: ${e.message}`); finish(`Error: ${e.message}`); }
       finally { running = false; setRunning(false); }
     });
     $('download').addEventListener('click', () => { readForm(); setRunning(true); runDownload(settings, ui); });
     $('test1').addEventListener('click', () => { readForm(); setRunning(true); runDownload(settings, ui, { limit: 1 }); });
-    $('stop').addEventListener('click', () => { stopFlag = true; log('Stopping after the current file…'); });
+    $('stop').addEventListener('click', () => { stopFlag = true; log('Stopping after the current file…'); activity('Stopping after the current file…'); });
     $('resetLimit').addEventListener('click', () => { store.set('fbd.upscaleLimitAt', 0); renderStatus(); log('Upscale limit pause reset.'); });
     $('refreshLearned').addEventListener('click', () => { if (!settings.learnMode) { log('Turn on "Learn from my clicks" first.'); return; } learnedNow(); renderLearned(); log('Learned values refreshed from what the page did since Learn mode was enabled.'); });
     $('applyLearned').addEventListener('click', () => {

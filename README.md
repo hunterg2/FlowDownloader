@@ -27,7 +27,9 @@ session, exactly like the Flow web app does.
 
 1. Open a project. Click **⬇ Flow Export**, set **Since**, tick **Images** (and **Videos**
    if wanted).
-2. Click **Scan (dry run)** to see what matches, then **Test 1 picture**. If that file lands
+2. Click **Scan (dry run)** to see what matches without downloading anything: a summary
+   appears under the buttons (what would be saved or upscaled and roughly how long it takes)
+   and the matching items are listed at the bottom of the panel. Then click **Test 1 picture**. If that file lands
    correctly, click **Download**. The first time, Chrome asks once to allow this site to
    download multiple files → **Allow**.
 3. Files are named `YYYY-MM-DD_HH-MM-SS - <prompt> - <id>.jpg|png|mp4` (or prompt first,
@@ -49,6 +51,8 @@ records it as done.
 Because Flow throttles downloads and caps upscales per day, this mode is deliberately slow
 and careful:
 
+- The line under the buttons shows which picture it is on, the current step (finding the
+  tile, Flow upscaling, waiting before the next one) and about how long the run has left.
 - Strictly one picture at a time, waiting for each file to finish. Use *Mode → Tampermonkey*
   for a real "saved to disk" signal; plain browser downloads only get a size-based wait.
 - **Pause between upscales** (default 8 s). **Max per run** budgets a single run.
