@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.10**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.11**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -166,8 +166,9 @@ Good to know:
   stops. The full panel comes back by itself when the run ends.
 - **Settings lock while a run is going.** The run uses what was set when it started; press
   **Stop** to change them.
-- **Move it** by dragging its header. It remembers where you put it; double-click the header to
-  put it back in the corner. **✕** closes it to the round button; a running download keeps going.
+- **Move it** by dragging its header, or drag the round **⬇ Flow Export** button itself. It
+  remembers where you put it; double-click the panel's header to put it back in the corner.
+  **✕** closes it to the round button; a running download keeps going.
 
 ## FAQ
 

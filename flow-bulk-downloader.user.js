@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.10
+// @version      0.3.11
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.10';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.11';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -1645,7 +1645,7 @@
         :host { all: initial; --bg:#1e1f22; --bg2:#26272b; --field:#2f3034; --line:#3c4043; --text:#e8eaed; --muted:#9aa0a6; --accent:#8ab4f8; --blue:#1a73e8; --ok:#81c995; --bad:#f28b82; --warn:#fdd663; }
         * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px; color: var(--text); }
         [hidden] { display:none !important; }
-        .fab { display:none; background:var(--blue); color:#fff; border:none; border-radius:999px; padding:10px 14px; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.4); font-weight:600; }
+        .fab { display:none; background:var(--blue); color:#fff; border:none; border-radius:999px; padding:10px 14px; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.4); font-weight:600; touch-action:none; user-select:none; }
         .fab.on { display:inline-flex; gap:6px; align-items:center; }
         .fab .badge { background:#fff; color:var(--blue); }
         .panel { display:none; flex-direction:column; width:440px; max-width:calc(100vw - 32px); max-height:min(640px, calc(100vh - 32px)); background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.6); overflow:hidden; }
@@ -1952,7 +1952,7 @@
         <div class="miniBar"><div class="bar"><div id="mBar"></div></div><span class="pct" id="mPct"></span></div>
         <div class="lines" id="mLines"></div>
       </div>
-      <button class="fab on" id="fab" title="Flow Bulk Downloader">⬇ Flow Export <span class="badge" id="fabBadge" hidden></span></button>
+      <button class="fab on" id="fab" title="Flow Bulk Downloader · drag to move">⬇ Flow Export <span class="badge" id="fabBadge" hidden></span></button>
     `);
 
     const $ = (id) => root.getElementById(id);
@@ -2171,9 +2171,13 @@
     let pos = store.get(POS_KEY, null) || { right: 16, bottom: 16 };
     function fitToViewport(dragging) {
       const w = host.offsetWidth || 160, h = host.offsetHeight || 48;
-      pos.right = Math.max(0, Math.min(pos.right, innerWidth - w));
-      if (dragging) pos.bottom = Math.max(0, Math.min(pos.bottom, innerHeight - h));
-      host.style.right = `${pos.right}px`;
+      // Only a drag changes the saved spot; a wider view (the panel opened from a button dragged
+      // to the left edge) is shifted to fit without moving the button.
+      if (dragging) {
+        pos.right = Math.max(0, Math.min(pos.right, innerWidth - w));
+        pos.bottom = Math.max(0, Math.min(pos.bottom, innerHeight - h));
+      }
+      host.style.right = `${Math.max(0, Math.min(pos.right, innerWidth - w))}px`;
       host.style.bottom = `${Math.max(0, Math.min(pos.bottom, innerHeight - h - 8))}px`;
     }
     function setView(v) {
@@ -2184,25 +2188,34 @@
       if (v === 'open') { $('fabBadge').hidden = true; renderProjects(); renderLearned(); renderStatus(); }
       fitToViewport();
     }
-    function makeDraggable(handle) {
+    /** isButton: the handle is itself a button (the round one), so a press that moves a few
+     *  pixels is a drag and the click that follows it is ignored. */
+    let dragEndedAt = 0;
+    function makeDraggable(handle, isButton) {
       handle.addEventListener('pointerdown', (ev) => {
-        if (ev.button !== 0 || ev.target.closest('button')) return;
+        if (ev.button !== 0 || (!isButton && ev.target.closest('button'))) return;
         const r0 = host.getBoundingClientRect();
         const sx = ev.clientX, sy = ev.clientY, right0 = innerWidth - r0.right, bottom0 = innerHeight - r0.bottom;
+        let moved = false;
         handle.setPointerCapture(ev.pointerId);
-        const move = (e) => { pos = { right: right0 - (e.clientX - sx), bottom: bottom0 - (e.clientY - sy) }; fitToViewport(true); };
+        const move = (e) => {
+          if (!moved && Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
+          moved = true;
+          pos = { right: right0 - (e.clientX - sx), bottom: bottom0 - (e.clientY - sy) }; fitToViewport(true);
+        };
         const up = () => {
           handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up);
-          store.set(POS_KEY, pos);
+          if (moved) { store.set(POS_KEY, pos); dragEndedAt = Date.now(); }
         };
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
       });
+      if (isButton) return; // a double-click on the round button would open the panel twice
       handle.addEventListener('dblclick', (ev) => {
         if (ev.target.closest('button')) return;
         pos = { right: 16, bottom: 16 }; store.set(POS_KEY, pos); fitToViewport();
       });
     }
-    makeDraggable($('dragPanel')); makeDraggable($('dragMini'));
+    makeDraggable($('dragPanel')); makeDraggable($('dragMini')); makeDraggable($('fab'), true);
     window.addEventListener('resize', () => fitToViewport());
 
     function showTab(name) {
@@ -2241,7 +2254,10 @@
     const ui = { log, renderItems, progress, setRunning, finish };
     function requestStop() { stopFlag = true; log('Stopping after the current file…'); activity('Stopping after the current file…'); }
 
-    $('fab').addEventListener('click', () => setView(running && compactRun ? 'mini' : 'open'));
+    $('fab').addEventListener('click', () => {
+      if (Date.now() - dragEndedAt < 400) return; // the end of a drag, not a click
+      setView(running && compactRun ? 'mini' : 'open');
+    });
     $('close').addEventListener('click', () => setView(running && compactRun ? 'mini' : 'closed'));
     $('minimize').addEventListener('click', () => setView('mini'));
     $('expand').addEventListener('click', () => setView('open'));

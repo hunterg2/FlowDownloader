@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.11 — 2026-10-24
+
+- **The round ⬇ Flow Export button can be dragged too.** Drag it anywhere; a plain click still opens the panel. It shares its spot with the panel and the run card.
+- Opening the panel from a button near the left edge no longer moves the button when the panel closes.
+
 ## 0.3.10 — 2026-10-23
 
 - **4K counts separately from 2K.** A 4K run downloads items whose 2K (or 1080p) is already saved. The original, the standard upscale and 4K each have their own entry in the history; existing upscaled entries count as 2K / 1080p.
