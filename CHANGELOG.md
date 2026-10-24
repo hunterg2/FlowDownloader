@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-10-23
+
+- **Fix: the ⬇ Flow Export button never appeared on flow.google.com.** Flow enforces Trusted Types, which blocks building the panel from an HTML string. Panel markup now goes through a Trusted Types policy, with a node-by-node fallback builder if a policy cannot be created.
+- The panel re-mounts if the page removes it and logs a clear console error instead of failing silently.
+- Test harness: `?tt=1` enforces Trusted Types like Flow, `?tt=strict` also forces the fallback builder.
+
 ## 0.3.0 — 2026-10-06
 
 - **Learn mode**: watch Flow's own traffic and the menus you click while downloading one picture by hand, then propose and apply the current RPC ids and menu labels.

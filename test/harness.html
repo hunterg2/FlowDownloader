@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>
+  // ?tt=1 enforces Trusted Types like flow.google.com (any policy name allowed for the script).
+  // ?tt=strict only allows the harness's own policy, forcing the script's fallback DOM builder.
+  (function () {
+    const m = /[?&]tt=(\w+)/.exec(location.search);
+    window.__ttMode = m ? m[1] : '';
+    if (!m) return;
+    const names = m[1] === 'strict' ? 'harness' : 'harness flow-bulk-downloader';
+    document.write(`<meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types ${names}">`);
+  })();
+  window.__hp = (window.__ttMode && window.trustedTypes) ? trustedTypes.createPolicy('harness', { createHTML: (s) => s }) : null;
+  window.__H = (s) => (window.__hp ? window.__hp.createHTML(s) : s);
+</script>
 <title>Google Flow - Harness Project</title>
 <style>
   body{font-family:sans-serif;background:#111;color:#ddd;padding:20px}
@@ -142,7 +155,7 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
   for (let i = 0; i < N; i++) {
     const t = document.createElement('flow-tile-container');
     t.dataset.i = i;
-    t.innerHTML = `<img class="thumbnail" alt=""><div class="hotbar"><button aria-label="More options">⋮</button></div>`;
+    t.innerHTML = __H(`<img class="thumbnail" alt=""><div class="hotbar"><button aria-label="More options">⋮</button></div>`);
     t.addEventListener('mouseenter', () => { t.querySelector('.hotbar').style.display = 'block'; });
     t.addEventListener('mouseleave', () => { t.querySelector('.hotbar').style.display = 'none'; });
     t.querySelector('button').addEventListener('click', (e) => {
@@ -189,6 +202,6 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Flow_${res}_${i}.jpg`; document.body.appendChild(a); a.click(); a.remove();
   });
 </script>
-<script>document.write('<script src="/flow-bulk-downloader.user.js?v=' + Date.now() + '"><\/script>'); // cache-bust so edits show up on reload</script>
+<script>document.write(__H('<script src="/flow-bulk-downloader.user.js?v=' + Date.now() + '"><\/script>')); // cache-bust so edits show up on reload</script>
 </body>
 </html>

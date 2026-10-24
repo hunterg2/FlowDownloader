@@ -149,6 +149,12 @@ the outcome. The ids above live under **Advanced** and can be changed or learned
 2. Try **Learn mode** (above) if the menu labels or RPC ids moved.
 3. Share the Diagnose file and the parser/selectors can be adjusted quickly.
 
+No **⬇ Flow Export** button? Reload the Flow tab, check that Developer mode (or "Allow User
+Scripts" on Tampermonkey's details page) is on in `chrome://extensions`, and make sure
+Tampermonkey shows version 0.3.1 or later (Dashboard → Installed userscripts → Last updated;
+0.3.0 could not draw its panel on flow.google.com). Then open DevTools (F12) → Console and
+look for a line starting with `[Flow Bulk Downloader]`.
+
 Common messages: *"No session token on this page"* → reload the Flow tab (signed out?).
 *"Flow answered with an HTML page"* → sign in again. *"no Download entry in the tile
 menu: …"* → the menu texts are listed; set **Download menu label** under Advanced or use

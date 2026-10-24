@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.0
+// @version      0.3.1
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -1335,6 +1335,65 @@
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+  // flow.google.com sends `require-trusted-types-for 'script'`, so assigning a plain string to
+  // innerHTML throws. All UI markup goes through setHTML(): a Trusted Types policy when one can be
+  // created, otherwise a tiny builder that creates the (script-free, self-authored) markup node by node.
+  const TT_POLICY = (() => {
+    try {
+      const tt = window.trustedTypes;
+      if (tt && typeof tt.createPolicy === 'function') return tt.createPolicy('flow-bulk-downloader', { createHTML: (s) => s });
+    } catch (_) { /* policy names restricted by CSP: use the builder */ }
+    return null;
+  })();
+
+  const VOID_TAGS = /^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)$/i;
+  const RAW_TAGS = /^(style|textarea|title)$/i;
+  function decodeEntities(s) {
+    return s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (m, e) => {
+      const k = e.toLowerCase();
+      if (k[0] === '#') { const n = k[1] === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10); return Number.isFinite(n) ? String.fromCodePoint(n) : m; }
+      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[k];
+    });
+  }
+  function buildFromHtml(parent, html) {
+    while (parent.firstChild) parent.removeChild(parent.firstChild);
+    const tagRe = /<!--[\s\S]*?-->|<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[^\s"'>\/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g;
+    const attrRe = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+    const stack = [parent];
+    const top = () => stack[stack.length - 1];
+    let last = 0, m;
+    while ((m = tagRe.exec(html))) {
+      if (m.index > last) top().appendChild(document.createTextNode(decodeEntities(html.slice(last, m.index))));
+      last = tagRe.lastIndex;
+      if (m[0].startsWith('<!--')) continue;
+      if (m[1]) { // closing tag: pop back to the matching element
+        const name = m[1].toLowerCase();
+        for (let i = stack.length - 1; i > 0; i--) if (stack[i].localName === name) { stack.length = i; break; }
+        continue;
+      }
+      const el = document.createElement(m[2]);
+      let a; attrRe.lastIndex = 0;
+      while ((a = attrRe.exec(m[3] || ''))) el.setAttribute(a[1], decodeEntities(a[2] ?? a[3] ?? a[4] ?? ''));
+      top().appendChild(el);
+      if (VOID_TAGS.test(m[2])) continue;
+      if (RAW_TAGS.test(m[2])) { // contents are text up to the closing tag
+        const close = html.toLowerCase().indexOf(`</${m[2].toLowerCase()}`, last);
+        const end = close < 0 ? html.length : close;
+        const text = html.slice(last, end);
+        el.textContent = /^style$/i.test(m[2]) ? text : decodeEntities(text);
+        const gt = close < 0 ? html.length : html.indexOf('>', close) + 1;
+        last = tagRe.lastIndex = gt;
+        continue;
+      }
+      stack.push(el);
+    }
+    if (last < html.length) top().appendChild(document.createTextNode(decodeEntities(html.slice(last))));
+  }
+  function setHTML(el, html) {
+    if (TT_POLICY) { el.innerHTML = TT_POLICY.createHTML(html); return; }
+    try { el.innerHTML = html; } catch (_) { buildFromHtml(el, html); }
+  }
+
   function mountUI() {
     if (document.getElementById('fbd-host')) return;
     const host = document.createElement('div');
@@ -1344,7 +1403,7 @@
     const root = host.attachShadow({ mode: 'open' });
     const onLabs = location.hostname === 'labs.google';
 
-    root.innerHTML = `
+    setHTML(root, `
       <style>
         :host { all: initial; }
         * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px; color: #e8eaed; }
@@ -1538,7 +1597,7 @@
         <div class="log" id="log"></div>
       </div>
       <button class="fab" id="fab" title="Flow Bulk Downloader">⬇ Flow Export</button>
-    `;
+    `);
 
     const $ = (id) => root.getElementById(id);
     const panel = $('panel');
@@ -1601,9 +1660,9 @@
       const projects = discoverProjectsFromDom();
       const el = $('projects');
       const list = Object.values(projects).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
-      if (!list.length) { el.innerHTML = '<span class="muted">No projects discovered yet. Visit the Flow home page, then click "Refresh list".</span>'; return; }
+      if (!list.length) { setHTML(el, '<span class="muted">No projects discovered yet. Visit the Flow home page, then click "Refresh list".</span>'); return; }
       const sel = new Set((settings.selectedProjects || []).map((s) => s.toLowerCase()));
-      el.innerHTML = list.map((p) => `<label><input type="checkbox" value="${p.id}" ${sel.has(p.id) ? 'checked' : ''}> <span>${escapeHtml(p.title || '(untitled)')} <span class="muted">${p.id.slice(0, 8)}</span></span></label>`).join('');
+      setHTML(el, list.map((p) => `<label><input type="checkbox" value="${p.id}" ${sel.has(p.id) ? 'checked' : ''}> <span>${escapeHtml(p.title || '(untitled)')} <span class="muted">${p.id.slice(0, 8)}</span></span></label>`).join(''));
     }
     let creditsText = '';
     function renderStatus() {
@@ -1629,9 +1688,9 @@
     }
     function renderItems(items) {
       const el = $('items');
-      if (!items.length) { el.innerHTML = '<span class="muted">No matching items.</span>'; return; }
-      el.innerHTML = items.slice(0, 300).map((i) => `<div>${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + escapeHtml(i.model) : ''} · ${escapeHtml(i.title || '(untitled)')} <span class="muted">${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}</span></div>`).join('') +
-        (items.length > 300 ? `<div class="muted">…and ${items.length - 300} more</div>` : '');
+      if (!items.length) { setHTML(el, '<span class="muted">No matching items.</span>'); return; }
+      setHTML(el, items.slice(0, 300).map((i) => `<div>${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + escapeHtml(i.model) : ''} · ${escapeHtml(i.title || '(untitled)')} <span class="muted">${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}</span></div>`).join('') +
+        (items.length > 300 ? `<div class="muted">…and ${items.length - 300} more</div>` : ''));
     }
     function progress(i, n, item) {
       $('barfill').style.width = n ? `${Math.round((i / n) * 100)}%` : '0%';
@@ -1772,6 +1831,18 @@
     setTimeout(discoverProjectsFromDom, 4000);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountUI);
-  else mountUI();
+  // Mount the panel; never fail silently, and re-mount if the page ever removes it.
+  let mountErrors = 0;
+  function safeMount() {
+    if (document.getElementById('fbd-host')) return;
+    try { mountUI(); }
+    catch (e) {
+      mountErrors++;
+      const host = document.getElementById('fbd-host'); if (host) host.remove();
+      console.error('[Flow Bulk Downloader] could not build its panel:', e);
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', safeMount);
+  else safeMount();
+  setInterval(() => { if (mountErrors < 3) safeMount(); }, 3000);
 })();
