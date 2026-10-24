@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.10 — 2026-10-23
+
+- **4K counts separately from 2K.** A 4K run downloads items whose 2K (or 1080p) is already saved. The original, the standard upscale and 4K each have their own entry in the history; existing upscaled entries count as 2K / 1080p.
+- If 4K isn't available (locked on your plan) and Flow's menu only offers a size that is already saved, the item is deferred instead of saved again.
+
 ## 0.3.9 — 2026-10-23
 
 - **"Stop the run" on the daily limit now really stops.** Flow doesn't always word the limit clearly, so the script took it for an ordinary failed upscale and saved originals instead. Now two failed upscales in a row, or upscale entries greyed out in Flow's menu, count as the daily limit and follow the **On the daily limit** setting.

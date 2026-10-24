@@ -330,6 +330,11 @@ test('pictures and videos each have their own quality', () => {
   assert.equal(H.anyUpscale({ quality: 'original', videoQuality: 'original' }), false);
   assert.equal(H.pickUpscaleSize('video', both), '1080p');
   assert.equal(H.pickUpscaleSize('image', both), '2K');
+  assert.equal(H.doneKey('m1', false, '4K'), 'm1');
+  assert.equal(H.doneKey('m1', true, '2K'), 'm1|up'); // same key as before sizes were tracked
+  assert.equal(H.doneKey('m1', true, '1080p'), 'm1|up');
+  assert.equal(H.doneKey('m1', true, ''), 'm1|up');
+  assert.equal(H.doneKey('m1', true, '4 K'), 'm1|up:4k');
   const items = [{ kind: 'image' }, { kind: 'video' }, { kind: 'video' }];
   assert.equal(H.describeMatches(items, both), '1 picture would be upscaled to 2K, 2 videos would be upscaled to 1080p');
   assert.equal(H.describeMatches(items, vidsOnly), '1 picture saved at original quality, 2 videos would be upscaled to 1080p');

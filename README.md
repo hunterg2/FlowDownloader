@@ -141,10 +141,11 @@ Good to know:
   row**, or upscale entries greyed out in Flow's menu, also count as the daily limit.
 - An item it couldn't reach (for example because the page was busy) is **deferred**:
   nothing is saved, it isn't marked as done, and the next run tries it again.
-- **Original and upscaled are tracked separately.** If you already saved something at original
-  quality, an upscaled run still downloads it again, upscaled.
+- **Original, 2K (1080p for videos) and 4K are each tracked separately.** If you already saved
+  something at original quality, a 2K run still downloads it again at 2K, and a 4K run
+  downloads it again at 4K even if its 2K is saved.
 - 4K (for pictures and videos) is a paid Flow option. When it's locked, the best available size
-  is used.
+  is used, but a size that's already saved isn't downloaded again.
 
 ## The panel
 
@@ -183,7 +184,7 @@ from the files. It only downloads something again if:
 - you press **Tools → Clear history**;
 - the history is lost: the script or Tampermonkey is reinstalled, or you use another browser or
   Chrome profile (each has its own history);
-- you switch from Original to Upscaled (each quality is tracked separately).
+- you switch to another quality: Original, 2K and 4K are each tracked separately.
 
 **I lost my history (new PC, reinstall). How do I avoid downloading everything again?**
 Before a reinstall or a move, use **Tools → Export backup**, and **Import backup…** afterwards.

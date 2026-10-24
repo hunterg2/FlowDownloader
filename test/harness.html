@@ -37,7 +37,7 @@
 <h1>Local harness for flow-bulk-downloader.user.js</h1>
 <p>Fakes Tampermonkey's GM_* APIs, Flow's <code>WIZ_global_data</code>, a batchexecute backend (listing, media, credits,
 upscale) and a project grid with Flow-like hover menus (Download → 1K Original / 2K Upscaled / 4K Upscaled).
-Upscale #2 fails with a toast and every upscale after the 3rd successful one hits a fake daily limit (add <code>&amp;lim=vague</code> to word it as a plain failure, or <code>&amp;lim=grey</code> to grey out the upscale entries instead). Local testing only.</p>
+Upscale #2 fails with a toast and every upscale after the 3rd successful one hits a fake daily limit (add <code>&amp;lim=vague</code> to word it as a plain failure, <code>&amp;lim=grey</code> to grey out the upscale entries instead, or <code>&amp;lim=none</code> for no failures or limit; <code>&amp;plan=4k</code> unlocks 4K). Local testing only.</p>
 <a href="/project/11111111-1111-4111-8111-111111111111">Harness Project One</a>
 <a href="/project/22222222-2222-4222-8222-222222222222">Harness Project Two</a>
 <div id="grid"></div>
@@ -54,6 +54,7 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
 <pre id="calls"></pre>
 <script>
   window.__lim = (/[?&]lim=(\w+)/.exec(location.search) || [])[1] || ''; // read before the URL is rewritten
+  window.__plan4k = /[?&]plan=4k\b/.test(location.search); // &plan=4k unlocks the 4K entries
   history.replaceState(null, '', '/project/11111111-1111-4111-8111-111111111111' + location.hash);
   const PID = '11111111-1111-4111-8111-111111111111';
   const logEl = document.getElementById('calls');
@@ -163,7 +164,7 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
       activeTile = t; const r = e.target.getBoundingClientRect();
       submenu.innerHTML = __H(isVideoAt(i) // Flow's video menu (verified 2026-10-23): GIF, 720p original, 1080p and 4K upscaled
         ? '<div role="menuitem" data-res="GIF">270p Animated GIF</div><div role="menuitem" data-res="720p">720p Original size</div><div role="menuitem" data-res="1080p">1080p Upscaled</div><div role="menuitem" data-res="4Kv" aria-disabled="true" style="opacity:.4">4K Upscaled</div>'
-        : `<div role="menuitem" data-res="1K">1K Original</div><div role="menuitem" data-res="2K"${LIM === 'grey' && upscaleOk >= 3 ? ' aria-disabled="true" style="opacity:.4"' : ''}>2K Upscaled</div><div role="menuitem" data-res="4K" aria-disabled="true" style="opacity:.4">4K Upscaled</div>`);
+        : `<div role="menuitem" data-res="1K">1K Original</div><div role="menuitem" data-res="2K"${LIM === 'grey' && upscaleOk >= 3 ? ' aria-disabled="true" style="opacity:.4"' : ''}>2K Upscaled</div><div role="menuitem" data-res="4K"${window.__plan4k ? '' : ' aria-disabled="true" style="opacity:.4"'}>4K Upscaled</div>`);
       menu.style.left = r.left + 'px'; menu.style.top = (r.bottom + 4) + 'px'; menu.style.display = 'block'; submenu.style.display = 'none';
     });
     grid.appendChild(t);
@@ -198,8 +199,8 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
       upscaleAttempts++;
       await window.fetch(`/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=SPrCad&_=${Date.now()}`, { method: 'POST', body: 'f.req=x' }).catch(() => {});
       await new Promise((r) => setTimeout(r, 300));
-      if (upscaleAttempts === 2) { toast('Upscale failed. Please try again.'); return; }
-      if (upscaleOk >= 3) { toast(LIM === 'vague' ? 'Upscale failed. Please try again.' : "You've reached your daily limit of upscaled downloads. Try again tomorrow."); return; }
+      if (upscaleAttempts === 2 && LIM !== 'none') { toast('Upscale failed. Please try again.'); return; }
+      if (upscaleOk >= 3 && LIM !== 'none') { toast(LIM === 'vague' ? 'Upscale failed. Please try again.' : "You've reached your daily limit of upscaled downloads. Try again tomorrow."); return; }
       upscaleOk++;
     }
     if (isVideo && res === '1080p') await new Promise((r) => setTimeout(r, 2500)); // video upscales take longer

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.9
+// @version      0.3.10
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.9';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.10';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -505,7 +505,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, anyUpscale, pickUpscaleSize,
+    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, anyUpscale, pickUpscaleSize, doneKey,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -537,7 +537,13 @@
     rpcUpscaleIds: 'SPrCad,p0UkFb', downloadLabel: 'Download', optionsLabel: 'option|more|menu|opcion|más|mehr|plus|autres|altro|mais',
   };
 
-  function doneKey(mediaId, upscaled) { return upscaled ? `${mediaId}|up` : mediaId; }
+  /** History key: the original, the standard upscale (2K / 1080p, key "|up" as before 0.3.10) and
+   *  any other size such as 4K ("|up:4k") are each tracked on their own. */
+  function doneKey(mediaId, upscaled, size) {
+    if (!upscaled) return mediaId;
+    const s = String(size || '').replace(/\s+/g, '').toLowerCase();
+    return !s || s === '2k' || s === '1080p' ? `${mediaId}|up` : `${mediaId}|up:${s}`;
+  }
   function loadSettings() { return Object.assign({}, DEFAULT_SETTINGS, store.get('fbd.settings', {})); }
   function saveSettings(s) { store.set('fbd.settings', s); }
   function loadDone() { return store.get('fbd.done', {}); }
@@ -1098,7 +1104,7 @@
     };
   }
 
-  async function uiDownloadUpscaled(item, settings) {
+  async function uiDownloadUpscaled(item, settings, savedSize) {
     if (!currentProjectId()) throw new UpscaleDeferError('upscaled mode needs a project page open in this tab', true);
     if (item.projectId && item.projectId.toLowerCase() !== currentProjectId()) throw new UpscaleDeferError('belongs to another project; only the open project\'s grid can be driven');
     activity('Finding its tile in the grid…');
@@ -1136,6 +1142,12 @@
           throw new Error('no upscaled entry found in: ' + lastMenuTexts.join(' | '));
         }
         chosenText = textOf(chosen); upscaled = true;
+        const gotSize = (chosenText.match(/\d+\s*[kp]\b/i) || [''])[0];
+        const wantSize = pickUpscaleSize(item.kind, settings);
+        if (gotSize && savedSize && doneKey('', true, gotSize) !== doneKey('', true, wantSize) && savedSize(gotSize)) {
+          pressEscape(); // e.g. 4K is locked on this plan and its 2K is already saved
+          throw new UpscaleDeferError(`${wantSize} isn't available in Flow's menu, and its ${gotSize.replace(/\s+/g, '')} is already saved`);
+        }
         hoverEl(chosen); clickEl(chosen);
       }
       const shownSize = (chosenText.match(/\d+\s*[kp]\b/i) || [pickUpscaleSize(item.kind, settings)])[0].replace(/\s+/g, '');
@@ -1174,10 +1186,10 @@
         const rel = buildRelPath(item, name, pathOptsFor(item, settings));
         capture.disarm();
         const saved = await saveBlob(blob, rel, settings);
-        return { name, path: saved.path, bytes: blob.size, how: saved.how, viaPoster: false, upscaled, qualityLabel };
+        return { name, path: saved.path, bytes: blob.size, how: saved.how, viaPoster: false, upscaled, size: upscaled ? shownSize : '', qualityLabel };
       }
       await pacedSleep(Math.min(15000, 1500 + (st.blob ? st.blob.size / 2e6 * 1000 : 3000)));
-      return { name: `${chosenText} — saved by Flow under its own filename`, path: '', bytes: st.blob ? st.blob.size : 0, how: 'flow-ui', viaPoster: false, upscaled, qualityLabel, flowNamed: true };
+      return { name: `${chosenText} — saved by Flow under its own filename`, path: '', bytes: st.blob ? st.blob.size : 0, how: 'flow-ui', viaPoster: false, upscaled, size: upscaled ? shownSize : '', qualityLabel, flowNamed: true };
     } finally {
       capture.disarm();
     }
@@ -1290,7 +1302,7 @@
       }
       if (settings.skipDone && !opts.ignoreDone) {
         const wantUp = wantsUpscale(kind, settings);
-        if (done[doneKey(it.mediaId, wantUp)]) { out.skippedDone++; continue; }
+        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))]) { out.skippedDone++; continue; }
       }
       out.keep.push(it);
     }
@@ -1402,7 +1414,7 @@
             if (retryIdx !== i) { retryIdx = i; hiddenRetries = 0; }
             const attemptAt = Date.now();
             try {
-              r = await uiDownloadUpscaled(it, settings);
+              r = await uiDownloadUpscaled(it, settings, (size) => !!done[doneKey(it.mediaId, true, size)]);
               if (r.upscaled) {
                 upscalesDone++; recordUpscale(); upFailStreak = 0;
                 const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
@@ -1447,7 +1459,7 @@
           }
           try { await writeSidecar(it, r, settings); } catch (e) { log(`  sidecar failed: ${e.message}`); }
           ok++; failStreak = 0;
-          done[doneKey(it.mediaId, !!r.upscaled)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed };
+          done[doneKey(it.mediaId, !!r.upscaled, r.size)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed };
           saveDone(done);
           rows.push({
             savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '',
@@ -1494,7 +1506,7 @@
     let n = 0;
     for (const it of f.keep) {
       const up = wantsUpscale(it.kind, settings);
-      const k = doneKey(it.mediaId, up);
+      const k = doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
       if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: up, upscaleFailed: false, manual: true }; n++; }
     }
     saveDone(done);
