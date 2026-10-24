@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.7**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.10**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -177,6 +177,22 @@ download history kept in Tampermonkey's own storage (with the file name, date an
 **Skip already saved** ticked, anything in that history is skipped. The **"N in history"** chip in
 the top strip shows how many entries it holds. It never looks at your Downloads folder.
 
+**Does the history remember which quality I saved?**
+Yes. Original, 2K (1080p for videos) and 4K each get their own entry, and the entry also
+notes the exact quality, such as "2K Upscaled". So having the original doesn't stop a 2K run,
+and having the 2K doesn't stop a 4K run. Each run only skips items it already has **at the
+quality you picked**. The quality is also in the file name (`[2K Upscaled]`) and in the
+manifest's quality column.
+
+**I picked 2K but some pictures were saved at original quality. Why?**
+When an upscale fails, the script saves the original meanwhile so you still get the picture
+(**If an upscale fails, save the original meanwhile**, Options → Upscaling; untick it if you'd
+rather get nothing). Those pictures aren't marked as done for 2K: the next 2K run tries the
+upscale again, without saving the original a second time. Two failed upscales in a row are
+taken as Flow's daily limit, and then **On the daily limit** decides what happens: **stop the
+run** stops straight away, **continue with originals** saves the rest at original quality and
+keeps them queued for 2K.
+
 **If I move the downloaded files out of my Downloads folder, will it download them again?**
 No. Moving, renaming or deleting the files changes nothing, because the history is separate
 from the files. It only downloads something again if:
@@ -257,6 +273,8 @@ one readable file in this repo.
 - **Do originals first, upscaled later.** Save everything at original quality quickly, then run
   an upscaled pass over the pictures and videos you actually want bigger, using a narrow date range or the
   **Prompt contains** filter (Options → Filters).
+- **Going bigger later is fine.** If your plan gains 4K, a 4K run picks up pictures you already
+  have at 2K; the 2K files stay in the history too.
 - **Keep the computer awake** during long runs. If it goes to sleep, the run stalls; anything
   that failed is tried again on the next run.
 - **Use the To date** to download a particular stretch, for example one week.
@@ -421,4 +439,6 @@ npm run harness          # serve this folder, then open http://localhost:8765/te
 
 `test/harness.html` fakes Tampermonkey's APIs, Flow's tokens, a batchexecute backend and a
 project grid with hover menus, including a failing upscale and a fake daily limit, so the whole
-panel can be exercised without touching Google.
+panel can be exercised without touching Google. Add `&lim=vague` to word the limit as a plain
+failure, `&lim=grey` to grey out the upscale entries instead, `&lim=none` for no failures or
+limit, and `&plan=4k` to unlock the 4K entries.
