@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.3
+// @version      0.3.4
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -228,6 +228,8 @@
       projectId: isUuid(n[n.length - 1]) ? n[n.length - 1] : null,
       title: typeof d[0] === 'string' ? d[0] : '',
       createdMs: created,
+      // Older notes read d[2] as "is video"; live (2026-10) it is true on some plain pictures, so
+      // extractItems() lets the generation record's kind win and keeps this only as a fallback.
       kind: d[2] === true ? 'video' : (d[2] === false ? 'image' : null),
       done: d[6],
       urls: splitUrls(collectUrls(n)),
@@ -278,6 +280,8 @@
           if (cur.createdMs == null || (incomingStrong && !currentStrong) || (incomingStrong === currentStrong && it.createdMs < cur.createdMs)) {
             cur.createdMs = it.createdMs; cur.createdSource = it.createdSource;
           }
+        } else if (k === 'kind') {
+          if (it.kind && (cur.kind == null || it.hasRecord)) cur.kind = it.kind;
         } else if (it[k] != null && it[k] !== '' && (cur[k] == null || cur[k] === '')) {
           cur[k] = it[k];
         }
@@ -646,6 +650,29 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let stopFlag = false;
   async function pacedSleep(ms) { const end = Date.now() + ms; while (Date.now() < end && !stopFlag) await sleep(Math.min(250, end - Date.now())); }
+
+  // Flow only draws its grid while the tab is visible and Chrome throttles hidden tabs, so an
+  // upscaled run waits for the tab to come back instead of deferring every picture.
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') hiddenAt = Date.now(); });
+  const tabHidden = () => document.visibilityState === 'hidden';
+  async function waitForVisibleTab(log) {
+    if (!tabHidden() || stopFlag) return;
+    log('⏸ Paused: the Flow tab is hidden. Switch back to it and the run carries on.');
+    const t0 = Date.now();
+    await new Promise((res) => {
+      const check = () => {
+        if (tabHidden() && !stopFlag) return;
+        document.removeEventListener('visibilitychange', check); clearInterval(iv); res();
+      };
+      const iv = setInterval(check, 1000);
+      document.addEventListener('visibilitychange', check);
+    });
+    if (stopFlag) return;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    log(`▶ Resumed (paused ${secs < 120 ? secs + ' s' : Math.round(secs / 60) + ' min'}).`);
+    await sleep(1500); // let Flow redraw the grid
+  }
 
   function gmFetchBlob(url) {
     return new Promise((resolve, reject) => {
@@ -1202,6 +1229,7 @@
       }
       const done = loadDone();
       let ok = 0, fail = 0, upscalesDone = 0, deferred = 0, failStreak = 0, noGridStreak = 0, gridMissing = false;
+      let retryIdx = -1, hiddenRetries = 0;
       const hitLimit = (reason) => {
         store.set('fbd.upscaleLimitAt', Date.now());
         upAllowed = false;
@@ -1229,6 +1257,10 @@
         try {
           let r, upscaleFailed = false;
           if (needsUp && upAllowed) {
+            await waitForVisibleTab(log);
+            if (stopFlag) continue;
+            if (retryIdx !== i) { retryIdx = i; hiddenRetries = 0; }
+            const attemptAt = Date.now();
             try {
               r = await uiDownloadUpscaled(it, settings);
               if (r.upscaled) { upscalesDone++; recordUpscale(); await pacedSleep(Math.max(0, settings.upscalePauseSec || 0) * 1000); }
@@ -1237,6 +1269,8 @@
                 hitLimit(e.message);
                 if (settings.onLimit === 'originals') { log('Continuing with original quality for the remaining pictures; they stay queued for upscaling after the pause.'); r = await downloadItem(it, settings, log); }
                 else { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these pictures will be retried.`); deferred++; break; }
+              } else if (e && e.defer && (tabHidden() || hiddenAt >= attemptAt) && hiddenRetries++ < 3) {
+                i--; continue; // the tab was hidden mid-attempt: wait for it, then retry this picture
               } else if (e && e.defer) {
                 deferred++;
                 log(`  ⏭ ${it.mediaId.slice(0, 8)} deferred: ${e.message}`);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4 — 2026-10-23
+
+- **Upscaled runs pause while the Flow tab is hidden** instead of deferring every picture. The log shows "⏸ Paused: the Flow tab is hidden" and the run carries on when you switch back; a picture interrupted by switching away is retried, not deferred.
+- **Fix: some pictures were treated as videos** and failed with "no download URL available". A flag on Flow's grid entries that older notes read as "is video" is set on ordinary pictures too (299 of 323 "videos" in a real project were pictures). The generation record now decides the kind.
+
 ## 0.3.3 — 2026-10-23
 
 - **Fix: Upscaled mode deferred every picture on the live site.** Flow reveals each tile's hover toolbar with CSS `:hover`, which scripted mouse events cannot trigger, so the script never saw a visible "More options" button. It now clicks the labelled menu button even while hidden; Flow opens the menu normally (verified on flow.google.com).

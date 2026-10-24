@@ -62,8 +62,10 @@ and careful:
 - Pictures whose tile or menu cannot be reached are **deferred** (nothing downloaded) and
   retried next run. Three failures in a row pause two minutes; six stop the run.
 
-Keep the Flow tab in the **foreground** while an upscaled run is going: Flow's grid only
-renders tiles while the tab is visible. Upscaled mode works for the project open in the tab;
+Keep the Flow tab **visible** while an upscaled run is going: Flow's grid only renders tiles
+while the tab is visible. If you switch to another tab or minimize the window, the run pauses
+("⏸ Paused: the Flow tab is hidden" in the log) and carries on when you come back. Working in
+another window is fine as long as the Flow window stays visible, for example on a second monitor. Upscaled mode works for the project open in the tab;
 videos are always saved at original quality.
 
 ## Learn mode (when Flow changes)
@@ -79,6 +81,9 @@ in the Diagnose export.
 
 Under **Saving & folders**:
 
+- The default *Mode → Browser download* saves every file straight into your browser's
+  Downloads folder, with no subfolders; **Base folder** and the folder options only apply in
+  Tampermonkey mode. Sort Downloads by date to find them.
 - *Mode → Tampermonkey* saves into `Downloads/<Base folder>/<Project>/<YYYY-MM>/…` when
   **Folder per project** / **Folder per month** are ticked. Tampermonkey may ask you once to
   whitelist file extensions (Dashboard → Settings → Downloads BETA: add

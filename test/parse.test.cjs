@@ -137,24 +137,27 @@ test('extractItems merges entries and records by media id and flags uploads', ()
 // the entry's own id. Extra records without an entry are reference images, not grid results.
 test('extractItems handles the live 2026-10 layout without duplicating items', () => {
   const SEC = 1787767332; // 2026-08-26
-  const entry = (asset, media, op, title) => [asset, null, null, [title, [SEC, 181952000], null, null, media, op, [SEC + 20, 0]], U(7)];
+  const entry = (asset, media, op, title, flag = null) => [asset, null, null, [title, [SEC, 181952000], flag, null, media, op, [SEC + 20, 0]], U(7)];
   const rec = (media, asset, dims) => [media, U(7), asset, null, null,
     [[SEC, 0], null, null, null, null, 'https://lh3.googleusercontent.com/asb/T' + media.slice(0, 4), [null, null, [['x', null, [[1]]]], [], 1], null, null, 1, 'https://lh3.googleusercontent.com/asb/T', null, null, 974606],
     [[null, 904663, null, null, null, null, null, 'x', 29, '', null, asset, null, 'https://lh3.googleusercontent.com/asb/T', 3], null, dims, null, null, ['https://lh3.googleusercontent.com/asb/T']]];
   const payload = [null,
-    [entry(U(101), U(201), U(301), 'A cozy kitchen'), entry(U(102), U(202), U(302), 'A harbor')],
-    [rec(U(201), U(101), [1376, 768]), rec(U(202), U(102), [1376, 768]), rec(U(203), U(101), [896, 1200])],
+    [entry(U(101), U(201), U(301), 'A cozy kitchen'), entry(U(102), U(202), U(302), 'A harbor', true), entry(U(104), U(204), U(304), 'A clip')],
+    [rec(U(201), U(101), [1376, 768]), rec(U(202), U(102), [1376, 768]), rec(U(203), U(101), [896, 1200]),
+      rec(U(204), U(104), null).concat([['https://lh3.googleusercontent.com/asb/V']])],
     [[U(400), 1, 'library item', [U(401), 'x'.repeat(40), U(402), null, null, [[1757385964, 0]]]]],
     null, null, null, [null, null, [[null, 3, 2, null, 'x']]]];
   const { items, stats } = H.extractItems(payload);
   assert.equal(stats.recordIdSlot, 0);
-  assert.equal(items.length, 3, 'two grid pictures + one reference image, no duplicates');
+  assert.equal(items.length, 4, 'two grid pictures + one video + one reference image, no duplicates');
   const a = items.find((i) => i.mediaId === U(201));
   assert.equal(a.title, 'A cozy kitchen');
   assert.equal(a.kind, 'image', 'kind comes from the record when the entry has no flag');
   assert.equal(a.createdMs, SEC * 1000 + 181);
   assert.equal(a.inGrid, true);
   assert.equal(a.hasRecord, true);
+  assert.equal(items.find((i) => i.mediaId === U(202)).kind, 'image', 'a true entry flag does not make a picture a video');
+  assert.equal(items.find((i) => i.mediaId === U(204)).kind, 'video');
   const ref = items.find((i) => i.mediaId === U(203));
   assert.equal(ref.inGrid, false);
   assert.equal(stats.notInGrid, 1);
