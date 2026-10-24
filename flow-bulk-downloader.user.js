@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.5
+// @version      0.3.6
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.5';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.6';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -1373,7 +1373,7 @@
           if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining pictures are deferred to the next run.`);
           deferred++; continue;
         }
-        ui.progress(i, keep.length, it);
+        ui.progress(i, keep.length, it, { ok, fail, deferred });
         try {
           let r, upscaleFailed = false;
           if (needsUp && upAllowed) {
@@ -1597,200 +1597,306 @@
 
     setHTML(root, `
       <style>
-        :host { all: initial; }
-        * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px; color: #e8eaed; }
-        .fab { background:#1a73e8; color:#fff; border:none; border-radius:999px; padding:10px 14px; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.4); font-weight:600; }
-        .panel { display:none; width: 470px; max-height: 88vh; overflow:auto; background:#202124; border:1px solid #3c4043; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.6); padding:12px; }
-        .panel.open { display:block; }
-        h3 { margin:0 0 8px; font-size:15px; display:flex; justify-content:space-between; align-items:center; }
-        h3 button { background:none; border:none; color:#9aa0a6; cursor:pointer; font-size:16px; }
-        details { border:1px solid #3c4043; border-radius:8px; padding:6px 10px; margin:0 0 8px; }
-        summary { color:#c4c7c5; cursor:pointer; font-weight:600; padding:2px 0; }
-        label { display:inline-flex; align-items:center; gap:6px; margin:3px 10px 3px 0; }
-        input[type=text], input[type=number], input[type=datetime-local], select, textarea { background:#303134; color:#e8eaed; border:1px solid #5f6368; border-radius:6px; padding:5px 7px; }
+        :host { all: initial; --bg:#1e1f22; --bg2:#26272b; --field:#2f3034; --line:#3c4043; --text:#e8eaed; --muted:#9aa0a6; --accent:#8ab4f8; --blue:#1a73e8; --ok:#81c995; --bad:#f28b82; --warn:#fdd663; }
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px; color: var(--text); }
+        [hidden] { display:none !important; }
+        .fab { display:none; background:var(--blue); color:#fff; border:none; border-radius:999px; padding:10px 14px; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.4); font-weight:600; }
+        .fab.on { display:inline-flex; gap:6px; align-items:center; }
+        .fab .badge { background:#fff; color:var(--blue); }
+        .panel { display:none; flex-direction:column; width:440px; max-width:calc(100vw - 32px); max-height:min(640px, calc(100vh - 32px)); background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.6); overflow:hidden; }
+        .panel.on { display:flex; }
+        .head, .miniHead { display:flex; align-items:center; gap:8px; padding:8px 8px 8px 12px; cursor:grab; user-select:none; touch-action:none; }
+        .head:active, .miniHead:active { cursor:grabbing; }
+        .title { font-weight:600; font-size:14px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .ver { color:var(--muted); font-weight:400; font-size:11px; }
+        .icon { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; padding:2px 6px; border-radius:6px; }
+        .icon:hover { background:var(--field); color:var(--text); }
+        .chips { display:flex; flex-wrap:wrap; gap:4px; padding:0 12px 8px; }
+        .chip { background:var(--bg2); border:1px solid var(--line); border-radius:999px; padding:2px 8px; font-size:11.5px; color:#c4c7c5; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .chip.ok { color:var(--ok); } .chip.warn { color:var(--warn); }
+        .alert { margin:0 12px 8px; padding:6px 8px; border-radius:8px; background:rgba(253,214,99,.1); border:1px solid rgba(253,214,99,.35); color:var(--warn); font-size:12px; }
+        .tabs { display:flex; gap:2px; padding:0 8px; border-bottom:1px solid var(--line); }
+        .tab { background:none; border:none; border-bottom:2px solid transparent; color:var(--muted); padding:7px 10px; cursor:pointer; font-weight:600; }
+        .tab.on { color:var(--accent); border-bottom-color:var(--accent); }
+        .body { overflow:auto; padding:10px 12px 12px; flex:1; min-height:0; }
+        .pane { display:none; } .pane.on { display:block; }
+        .field { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin:0 0 8px; }
+        .lbl { color:var(--muted); min-width:48px; }
+        label { display:inline-flex; align-items:center; gap:6px; }
+        .grid label { margin:3px 12px 3px 0; }
+        input[type=text], input[type=number], input[type=datetime-local], select, textarea { background:var(--field); color:var(--text); border:1px solid #5f6368; border-radius:6px; padding:5px 7px; }
+        input[type=checkbox], input[type=radio] { accent-color:var(--blue); }
         input[type=number] { width:70px; }
-        input[type=text].wide { width: 200px; }
+        input[type=text].wide { width:200px; }
         textarea { width:100%; min-height:44px; resize:vertical; }
-        .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0; }
-        .btns { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
-        .btn { background:#303134; border:1px solid #5f6368; color:#e8eaed; border-radius:6px; padding:6px 10px; cursor:pointer; }
-        .btn.primary { background:#1a73e8; border-color:#1a73e8; color:#fff; }
-        .btn.danger { border-color:#d93025; color:#f28b82; }
+        .seg { display:inline-flex; border:1px solid #5f6368; border-radius:8px; overflow:hidden; }
+        .seg label { gap:0; position:relative; }
+        .seg input { position:absolute; opacity:0; pointer-events:none; }
+        .seg span { padding:5px 12px; cursor:pointer; color:#c4c7c5; }
+        .seg input:checked + span { background:var(--blue); color:#fff; }
+        .seg input:focus-visible + span { outline:2px solid var(--accent); outline-offset:-2px; }
+        .hint { color:var(--muted); font-size:12px; margin:-2px 0 10px; }
+        .actions { display:flex; gap:6px; margin:4px 0 10px; }
+        .btn { background:var(--field); border:1px solid #5f6368; color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; }
+        .btn:hover:not(:disabled) { border-color:#80868b; }
+        .btn.primary { background:var(--blue); border-color:var(--blue); color:#fff; font-weight:600; flex:1; }
+        .btn.danger { border-color:#d93025; color:var(--bad); }
+        .actions .btn.danger { flex:1; font-weight:600; }
+        .btn.sm { padding:3px 8px; font-size:12px; }
         .btn:disabled { opacity:.5; cursor:not-allowed; }
-        .status { color:#9aa0a6; margin:4px 0; white-space:pre-wrap; }
-        .log { background:#111; border:1px solid #3c4043; border-radius:6px; padding:6px; height:150px; overflow:auto; font-family: ui-monospace, Consolas, monospace; font-size:11.5px; white-space:pre-wrap; }
-        .items { max-height:150px; overflow:auto; border:1px solid #3c4043; border-radius:6px; padding:4px 6px; font-size:12px; }
+        .btns { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
+        .card { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:10px; margin:0 0 8px; }
+        .cardTop { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+        .card.idle .cardTop { display:none; }
+        .card.idle .lines > div:first-child { margin-top:0; }
+        .count { font-size:18px; font-weight:700; white-space:nowrap; }
+        .pct { color:var(--muted); font-size:12px; min-width:32px; text-align:right; }
+        .bar { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
+        .bar > div { height:100%; background:var(--blue); width:0; transition:width .3s; }
+        .lines > div { margin-top:4px; }
+        .lines .item { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .lines .step { color:var(--accent); }
+        .lines .eta, .lines .tally { color:var(--muted); font-size:12px; }
+        .lines .msg { white-space:pre-wrap; color:#c4c7c5; }
+        .tip { color:var(--muted); font-size:11.5px; margin:0 0 8px; }
+        .link { background:none; border:none; color:var(--accent); cursor:pointer; padding:0 2px; font-size:11.5px; }
+        details { border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin:0 0 8px; }
+        summary { color:#c4c7c5; cursor:pointer; font-weight:600; padding:2px 0; display:flex; align-items:center; gap:6px; list-style:none; }
+        summary::-webkit-details-marker { display:none; }
+        summary::before { content:'▸'; color:var(--muted); width:10px; }
+        details[open] > summary::before { content:'▾'; }
+        summary .sum { color:var(--muted); font-weight:400; font-size:11.5px; margin-left:auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:60%; }
+        .row { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:5px 0; }
+        .badge { background:var(--blue); color:#fff; border-radius:999px; padding:0 6px; font-size:11px; font-weight:600; }
+        .log { background:#111; border:1px solid var(--line); border-radius:6px; padding:6px; margin-top:6px; height:160px; overflow:auto; font-family: ui-monospace, Consolas, monospace; font-size:11.5px; white-space:pre-wrap; }
+        .items { max-height:170px; overflow:auto; font-size:12px; margin-top:6px; }
         .items div { padding:2px 0; border-bottom:1px solid #2a2b2e; }
         .projects { max-height:120px; overflow:auto; }
         .projects label { display:flex; }
-        .bar { height:6px; background:#3c4043; border-radius:3px; overflow:hidden; margin:6px 0; }
-        .bar > div { height:100%; background:#1a73e8; width:0; transition:width .2s; }
-        .muted { color:#9aa0a6; }
-        .warn { color:#fdd663; }
-        .learned { background:#1b1f24; border:1px dashed #5f6368; border-radius:6px; padding:6px; font-family: ui-monospace, Consolas, monospace; font-size:11.5px; white-space:pre-wrap; }
+        .muted { color:var(--muted); }
+        .note { color:var(--muted); font-size:12px; margin:6px 0 2px; }
+        .warn { color:var(--warn); }
+        h4 { margin:12px 0 4px; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+        h4:first-child { margin-top:0; }
+        .learned { background:#1b1f24; border:1px dashed #5f6368; border-radius:6px; padding:6px; margin-top:6px; font-family: ui-monospace, Consolas, monospace; font-size:11.5px; white-space:pre-wrap; }
+        .mini { display:none; width:320px; max-width:calc(100vw - 32px); background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.6); padding-bottom:10px; }
+        .mini.on { display:block; }
+        .mini .miniHead { padding:6px 6px 6px 12px; }
+        .mini .title { font-size:13px; }
+        .miniBar { display:flex; align-items:center; gap:8px; padding:0 12px; }
+        .mini .lines { padding:0 12px; }
       </style>
       <div class="panel" id="panel">
-        <h3>Flow Bulk Downloader <span class="muted" style="font-weight:400;font-size:11px">v${VERSION}</span> <button id="close" title="Close">✕</button></h3>
-        <div class="status" id="status"></div>
-        ${onLabs ? '<div class="warn">This page is the old labs.google Flow. Open <b>https://flow.google.com</b> and use the tool there.</div>' : ''}
-        <div class="btns">
-          <button class="btn" id="scan">Scan (dry run)</button>
-          <button class="btn primary" id="download">Download</button>
-          <button class="btn" id="test1" title="Download only the newest matching picture, to check everything works">Test 1 picture</button>
-          <button class="btn danger" id="stop" disabled>Stop</button>
+        <div class="head" id="dragPanel" title="Drag to move · double-click to put it back in the corner">
+          <div class="title">⬇ Flow Export <span class="ver">v${VERSION}</span></div>
+          <button class="icon" id="minimize" title="Shrink to the small progress card" hidden>▁</button>
+          <button class="icon" id="close" title="Close">✕</button>
         </div>
-        <div class="bar"><div id="barfill"></div></div>
-        <div class="status" id="progress"></div>
+        <div class="chips" id="status"></div>
+        <div class="alert" id="statusWarn" hidden></div>
+        ${onLabs ? '<div class="alert">This page is the old labs.google Flow. Open <b>https://flow.google.com</b> and use the tool there.</div>' : ''}
+        <div class="tabs">
+          <button class="tab on" data-tab="main">Download</button>
+          <button class="tab" data-tab="options">Options</button>
+          <button class="tab" data-tab="tools">Tools</button>
+        </div>
+        <div class="body">
+          <section class="pane on" data-pane="main">
+            <div class="field">
+              <span class="lbl">From</span><input type="datetime-local" id="since">
+            </div>
+            <div class="field">
+              <span class="lbl">To</span><input type="datetime-local" id="until"><span class="muted">empty = up to now</span>
+            </div>
+            <div class="field">
+              <span class="lbl">Get</span>
+              <label><input type="checkbox" id="images"> Pictures</label>
+              <label><input type="checkbox" id="videos"> Videos</label>
+              <label title="Leave out files that are already in the download history"><input type="checkbox" id="skipDone"> Skip already saved</label>
+            </div>
+            <div class="field">
+              <span class="lbl">Quality</span>
+              <div class="seg">
+                <label><input type="radio" name="quality" value="original" id="qOriginal"><span>Original</span></label>
+                <label><input type="radio" name="quality" value="upscaled" id="qUpscaled"><span id="qUpLabel">Upscaled</span></label>
+              </div>
+            </div>
+            <div class="hint" id="qualityHint"></div>
+            <div class="actions">
+              <button class="btn" id="scan" title="List what would be downloaded, without downloading anything">Scan</button>
+              <button class="btn primary" id="download">Download</button>
+              <button class="btn danger" id="stop" disabled hidden>■ Stop</button>
+              <button class="btn" id="test1" title="Download only the newest matching item, to check everything works">Test 1</button>
+            </div>
+            <div class="card idle" id="card">
+              <div class="cardTop"><span class="count" id="pCount" hidden></span><div class="bar"><div id="barfill"></div></div><span class="pct" id="pPct"></span></div>
+              <div class="lines" id="progress"></div>
+            </div>
+            <div class="tip" id="popupTip">Chrome's download pop-up can cover this panel. To turn it off: Chrome Settings → Downloads → turn off "Show downloads when they're done". Files still save normally. <button class="link" id="tipHide">Hide</button></div>
+            <details id="itemsBox"><summary><span id="itemsHead">Matching items</span></summary><div class="items" id="items"><span class="muted">Scan to see matching items here.</span></div></details>
+            <details id="logBox"><summary>Log <span class="badge" id="logBadge" hidden></span><span class="sum"><button class="link" id="copyLog" title="Copy the log to the clipboard">Copy</button></span></summary><div class="log" id="log"></div></details>
+          </section>
 
-        <details open>
-          <summary>What to download</summary>
-          <div class="row">
-            <label>Since <input type="datetime-local" id="since"></label>
-            <label>Until <input type="datetime-local" id="until" title="optional"></label>
-          </div>
-          <div class="row">
-            <label><input type="checkbox" id="images"> Images</label>
-            <label><input type="checkbox" id="videos"> Videos</label>
-            <label><input type="checkbox" id="undated"> Include items with no date</label>
-            <label><input type="checkbox" id="skipDone"> Skip already downloaded</label>
-          </div>
-          <div class="row">
-            <label>Prompt contains <input type="text" id="kwInc" class="wide" placeholder="cat, sunset, /regex/"></label>
-            <label>but not <input type="text" id="kwExc" class="wide" placeholder="test, draft"></label>
-          </div>
-          <div class="row">
-            <label>Model contains <input type="text" id="modelFilter" placeholder="e.g. NARWHAL"></label>
-            <label><input type="checkbox" id="excludeUploads"> Exclude my uploaded reference images (experimental)</label>
-            <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts)</label>
-          </div>
-        </details>
+          <section class="pane" data-pane="options">
+            <details open>
+              <summary>Filters <span class="sum" id="sumFilters"></span></summary>
+              <div class="row grid">
+                <label><input type="checkbox" id="undated"> Include items with no date</label>
+              </div>
+              <div class="row">
+                <label>Prompt contains <input type="text" id="kwInc" class="wide" placeholder="cat, sunset, /regex/"></label>
+                <label>but not <input type="text" id="kwExc" class="wide" placeholder="test, draft"></label>
+              </div>
+              <div class="row">
+                <label>Model contains <input type="text" id="modelFilter" placeholder="e.g. NARWHAL"></label>
+              </div>
+              <div class="row grid">
+                <label><input type="checkbox" id="excludeUploads"> Leave out my uploaded reference images (experimental)</label>
+                <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts)</label>
+              </div>
+            </details>
 
-        <details open>
-          <summary>Picture quality</summary>
-          <div class="row">
-            <label><input type="radio" name="quality" value="original" id="qOriginal"> Original (direct, fast)</label>
-            <label><input type="radio" name="quality" value="upscaled" id="qUpscaled"> Upscaled, via Flow's own Download menu</label>
-          </div>
-          <div class="row">
-            <label>Prefer <input type="text" id="imageUpscale" list="fbd-res" size="5"><datalist id="fbd-res"><option value="2K"><option value="4K"><option value="1K"></datalist></label>
-            <label>Menu label contains <input type="text" id="upscaleLabel" size="8"></label>
-            <label>Timeout <input type="number" id="upscaleTimeout" min="10" step="10"> s</label>
-          </div>
-          <div class="row">
-            <label><input type="checkbox" id="fallbackOriginal"> If Flow says the upscale failed, save the original instead (not retried)</label>
-          </div>
-          <div class="row">
-            <label>Pause between upscales <input type="number" id="upscalePause" min="0" step="1"> s</label>
-            <label>Max per run <input type="number" id="maxUpscales" min="0" step="1" title="0 = no cap"></label>
-            <label>Daily cap <input type="number" id="dailyCap" min="0" step="1" title="0 = unknown; otherwise stop before Flow refuses"></label>
-          </div>
-          <div class="row">
-            <label>On daily limit <select id="onLimit"><option value="stop">stop the run</option><option value="originals">continue with originals</option></select></label>
-            <label>pause upscaling for <input type="number" id="limitPause" min="1" step="1"> h</label>
-            <button class="btn" id="resetLimit" title="Forget that the daily limit was hit">Reset limit pause</button>
-          </div>
-          <div class="muted">Upscaled mode operates Flow's menu one tile at a time, waits for each file to finish, and watches Flow's messages for "upscale failed" or the daily limit. Keep this project's grid open and the tab in the foreground. Pictures whose tile or menu cannot be reached are deferred and retried next run. Videos are always saved at original quality.</div>
-        </details>
+            <details>
+              <summary>Upscaling <span class="sum" id="sumUpscale"></span></summary>
+              <div class="row">
+                <label>Size <input type="text" id="imageUpscale" list="fbd-res" size="5"><datalist id="fbd-res"><option value="2K"><option value="4K"><option value="1K"></datalist></label>
+                <label>Pause between <input type="number" id="upscalePause" min="0" step="1"> s</label>
+              </div>
+              <div class="row">
+                <label>Max per run <input type="number" id="maxUpscales" min="0" step="1" title="0 = no cap"></label>
+                <label>Daily cap <input type="number" id="dailyCap" min="0" step="1" title="0 = unknown; otherwise stop before Flow refuses"></label>
+              </div>
+              <div class="row">
+                <label>On the daily limit <select id="onLimit"><option value="stop">stop the run</option><option value="originals">continue with originals</option></select></label>
+                <label>and pause upscaling for <input type="number" id="limitPause" min="1" step="1"> h</label>
+              </div>
+              <div class="row grid">
+                <label><input type="checkbox" id="fallbackOriginal"> If Flow says the upscale failed, save the original instead</label>
+              </div>
+              <div class="row"><button class="btn sm" id="resetLimit" title="Forget that the daily limit was hit">Reset limit pause</button></div>
+              <div class="note">Upscaled mode drives Flow's own Download menu one picture at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Keep the project open and the tab visible. Pictures it cannot reach are deferred to the next run. Videos are always saved at original quality.</div>
+            </details>
 
-        <details>
-          <summary>Which projects</summary>
-          <div class="row">
-            <label><input type="radio" name="scope" value="current" id="scopeCurrent"> This project only</label>
-            <label><input type="radio" name="scope" value="selected" id="scopeSelected"> Selected projects</label>
-            <button class="btn" id="refreshProjects" title="Re-read project links from this page">Refresh list</button>
-          </div>
-          <div class="projects" id="projects"></div>
-          <div class="muted">Projects are discovered from links on the Flow home page and from project pages you visit. You can also paste project URLs or IDs:</div>
-          <textarea id="extra" placeholder="https://flow.google.com/project/xxxxxxxx-xxxx-…  (one per line)"></textarea>
-        </details>
+            <details>
+              <summary>Projects <span class="sum" id="sumProjects"></span></summary>
+              <div class="row">
+                <label><input type="radio" name="scope" value="current" id="scopeCurrent"> This project only</label>
+                <label><input type="radio" name="scope" value="selected" id="scopeSelected"> Selected projects</label>
+                <button class="btn sm" id="refreshProjects" title="Re-read project links from this page">Refresh list</button>
+              </div>
+              <div class="projects" id="projects"></div>
+              <div class="note">Projects are found from links on the Flow home page and from project pages you visit. You can also paste project URLs or IDs:</div>
+              <textarea id="extra" placeholder="https://flow.google.com/project/xxxxxxxx-xxxx-…  (one per line)"></textarea>
+            </details>
 
-        <details>
-          <summary>Saving &amp; folders</summary>
-          <div class="row">
-            <label>Mode <select id="mode"><option value="browser">Browser download (simple)</option><option value="tampermonkey">Tampermonkey (folders, completion signal)</option></select></label>
-            <label>Base folder <input type="text" id="subfolder" size="14"></label>
-          </div>
-          <div class="row">
-            <label><input type="checkbox" id="folderByProject"> Folder per project</label>
-            <label><input type="checkbox" id="folderByMonth"> Folder per month</label>
-            <label>Name <select id="namePattern"><option value="date-title-id">date - prompt - id</option><option value="title-date-id">prompt - date - id</option></select></label>
-          </div>
-          <div class="row">
-            <label>Prompt sidecar <select id="sidecar"><option value="none">none</option><option value="txt">.txt next to each file</option><option value="json">.json next to each file</option></select></label>
-            <label><input type="checkbox" id="manifestPerRun"> CSV manifest after each run</label>
-          </div>
-          <div class="row">
-            <label><input type="checkbox" id="poster"> Preview-quality fallback if no original URL</label>
-            <label>Delay between items <input type="number" id="delay" min="0" step="100"> ms</label>
-          </div>
-          <div class="muted">Folders and sidecars next to files need Tampermonkey mode (Tampermonkey → Settings → Downloads: whitelist jpg png webp mp4 txt json csv). In browser mode everything lands flat in Downloads.</div>
-        </details>
+            <details>
+              <summary>Saving &amp; folders <span class="sum" id="sumSaving"></span></summary>
+              <div class="row">
+                <label>Save with <select id="mode"><option value="browser">Browser download (simple)</option><option value="tampermonkey">Tampermonkey (folders, completion signal)</option></select></label>
+              </div>
+              <div class="row">
+                <label>Base folder <input type="text" id="subfolder" size="14"></label>
+                <label><input type="checkbox" id="folderByProject"> Folder per project</label>
+                <label><input type="checkbox" id="folderByMonth"> Folder per month</label>
+              </div>
+              <div class="row">
+                <label>File name <select id="namePattern"><option value="date-title-id">date - prompt - id</option><option value="title-date-id">prompt - date - id</option></select></label>
+                <label>Prompt sidecar <select id="sidecar"><option value="none">none</option><option value="txt">.txt next to each file</option><option value="json">.json next to each file</option></select></label>
+              </div>
+              <div class="row grid">
+                <label><input type="checkbox" id="manifestPerRun"> CSV manifest after each run</label>
+                <label><input type="checkbox" id="poster"> Preview-quality fallback if there is no original</label>
+              </div>
+              <div class="row">
+                <label>Delay between items <input type="number" id="delay" min="0" step="100"> ms</label>
+              </div>
+              <div class="note">Folders and sidecars need Tampermonkey mode (Tampermonkey → Settings → Downloads: whitelist jpg png webp mp4 txt json csv). In browser mode everything lands flat in your Downloads folder.</div>
+            </details>
 
-        <details>
-          <summary>Automation</summary>
-          <div class="row">
-            <label>Auto-check every <input type="number" id="auto" min="0" step="1"> min while this tab is open (0 = off)</label>
-          </div>
-          <div class="row">
-            <label>Run on page load if last run older than <input type="number" id="runOnLoad" min="0" step="1"> h (0 = off)</label>
-          </div>
-          <div class="row">
-            <label>Auto project (for Upscaled mode) <input type="text" id="autoProject" class="wide" placeholder="project URL or id"></label>
-            <label><input type="checkbox" id="notify"> Desktop notifications</label>
-          </div>
-          <div class="muted">For unattended daily runs, schedule Chrome to open Flow each morning (see <code>schedule/Register-FlowTask.ps1</code> in the repo) and set "Run on page load". On the home page the auto project is opened first so Upscaled mode has a grid to work with.</div>
-        </details>
+            <details>
+              <summary>Automation <span class="sum" id="sumAuto"></span></summary>
+              <div class="row">
+                <label>Auto-check every <input type="number" id="auto" min="0" step="1"> min while this tab is open (0 = off)</label>
+              </div>
+              <div class="row">
+                <label>Run on page load if the last run is older than <input type="number" id="runOnLoad" min="0" step="1"> h (0 = off)</label>
+              </div>
+              <div class="row">
+                <label>Auto project (for Upscaled mode) <input type="text" id="autoProject" class="wide" placeholder="project URL or id"></label>
+              </div>
+              <div class="row grid">
+                <label><input type="checkbox" id="notify"> Desktop notifications</label>
+              </div>
+              <div class="note">For unattended daily runs, schedule Chrome to open Flow each morning (see <code>schedule/Register-FlowTask.ps1</code> in the repo) and set "Run on page load". On the home page the auto project is opened first so Upscaled mode has a grid to work with.</div>
+            </details>
+          </section>
 
-        <details>
-          <summary>Learn &amp; tools</summary>
-          <div class="row">
-            <label><input type="checkbox" id="learnMode"> Learn from my clicks (watch Flow's traffic and menus while I download one picture by hand)</label>
-          </div>
-          <div class="learned" id="learnedBox">Nothing learned yet.</div>
-          <div class="btns">
-            <button class="btn" id="refreshLearned">Refresh learned</button>
-            <button class="btn" id="applyLearned">Apply learned to Advanced</button>
-            <button class="btn" id="credits" title="Ask Flow for your credit balance">Refresh credits</button>
-          </div>
-          <div class="btns">
-            <button class="btn" id="diag" title="Export a redacted JSON of what Flow returned, for troubleshooting">Diagnose</button>
-            <button class="btn" id="exportCsv">Export full manifest (CSV)</button>
-            <button class="btn" id="exportJson">Export full manifest (JSON)</button>
-          </div>
-          <div class="btns">
-            <button class="btn" id="backup">Export backup (settings + history)</button>
-            <button class="btn" id="restore">Import backup…</button>
-            <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
-          </div>
-          <div class="btns">
-            <button class="btn" id="markDone" title="Mark everything currently in the selected projects as downloaded, so future runs only pick up new items">Mark all current as done</button>
-            <button class="btn" id="clear" title="Forget which files were already downloaded">Clear history</button>
-          </div>
-        </details>
-
-        <details>
-          <summary>Advanced (RPC ids &amp; labels)</summary>
-          <div class="row">
-            <label>Listing RPC <input type="text" id="rpcListing" size="7"></label>
-            <label>Alt listing <input type="text" id="rpcListingAlt" size="7"></label>
-            <label>Media RPC <input type="text" id="rpcMedia" size="7"></label>
-            <label>Credits RPC <input type="text" id="rpcCredits" size="7"></label>
-          </div>
-          <div class="row">
-            <label>Upscale RPC ids <input type="text" id="rpcUpscale" class="wide" placeholder="comma-separated"></label>
-          </div>
-          <div class="row">
-            <label>Download menu label <input type="text" id="downloadLabel" size="10"></label>
-            <label>Options button label (regex) <input type="text" id="optionsLabel" class="wide"></label>
-          </div>
-          <div class="muted">Google renames these with frontend builds. Use Learn mode to discover the current values, or send a Diagnose file.</div>
-        </details>
-
-        <div class="muted" id="itemsHead">Matching items</div>
-        <div class="items" id="items"><span class="muted">Scan to see matching items here.</span></div>
-        <div class="log" id="log"></div>
+          <section class="pane" data-pane="tools">
+            <h4>History</h4>
+            <div class="btns">
+              <button class="btn" id="markDone" title="Mark everything currently in the selected projects as downloaded, so future runs only pick up new items">Mark all current as done</button>
+              <button class="btn" id="clear" title="Forget which files were already downloaded">Clear history</button>
+            </div>
+            <h4>Export &amp; backup</h4>
+            <div class="btns">
+              <button class="btn" id="exportCsv">Manifest (CSV)</button>
+              <button class="btn" id="exportJson">Manifest (JSON)</button>
+              <button class="btn" id="backup" title="Settings and download history">Export backup</button>
+              <button class="btn" id="restore">Import backup…</button>
+              <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
+            </div>
+            <h4>Troubleshooting</h4>
+            <div class="btns">
+              <button class="btn" id="diag" title="Export a redacted JSON of what Flow returned, for troubleshooting">Diagnose</button>
+              <button class="btn" id="credits" title="Ask Flow for your credit balance">Check credits</button>
+            </div>
+            <details>
+              <summary>Learn from my clicks</summary>
+              <div class="row grid">
+                <label><input type="checkbox" id="learnMode"> Watch Flow's traffic and menus while I download one picture by hand</label>
+              </div>
+              <div class="learned" id="learnedBox">Nothing learned yet.</div>
+              <div class="btns">
+                <button class="btn sm" id="refreshLearned">Refresh learned</button>
+                <button class="btn sm" id="applyLearned">Apply learned to Advanced</button>
+              </div>
+            </details>
+            <details>
+              <summary>Advanced (RPC ids &amp; labels)</summary>
+              <div class="row">
+                <label>Listing RPC <input type="text" id="rpcListing" size="7"></label>
+                <label>Alt listing <input type="text" id="rpcListingAlt" size="7"></label>
+              </div>
+              <div class="row">
+                <label>Media RPC <input type="text" id="rpcMedia" size="7"></label>
+                <label>Credits RPC <input type="text" id="rpcCredits" size="7"></label>
+              </div>
+              <div class="row">
+                <label>Upscale RPC ids <input type="text" id="rpcUpscale" class="wide" placeholder="comma-separated"></label>
+              </div>
+              <div class="row">
+                <label>Download menu label <input type="text" id="downloadLabel" size="10"></label>
+                <label>Upscale label contains <input type="text" id="upscaleLabel" size="8"></label>
+              </div>
+              <div class="row">
+                <label>Options button label (regex) <input type="text" id="optionsLabel" class="wide"></label>
+                <label>Upscale timeout <input type="number" id="upscaleTimeout" min="10" step="10"> s</label>
+              </div>
+              <div class="note">Google renames these with frontend builds. Use Learn mode to discover the current values, or send a Diagnose file.</div>
+            </details>
+          </section>
+        </div>
       </div>
-      <button class="fab" id="fab" title="Flow Bulk Downloader">⬇ Flow Export</button>
+      <div class="mini" id="mini">
+        <div class="miniHead" id="dragMini" title="Drag to move · double-click to put it back in the corner">
+          <div class="title">⬇ Flow Export <span class="ver" id="mCount"></span></div>
+          <button class="icon" id="expand" title="Open the full panel">⤢</button>
+          <button class="btn danger sm" id="mStop">■ Stop</button>
+        </div>
+        <div class="miniBar"><div class="bar"><div id="mBar"></div></div><span class="pct" id="mPct"></span></div>
+        <div class="lines" id="mLines"></div>
+      </div>
+      <button class="fab on" id="fab" title="Flow Bulk Downloader">⬇ Flow Export <span class="badge" id="fabBadge" hidden></span></button>
     `);
 
     const $ = (id) => root.getElementById(id);
@@ -1799,12 +1905,17 @@
     if (!settings.sinceLocal) settings.sinceLocal = msToLocalInput(Date.now() - 7 * 86400000);
 
     const logEl = $('log');
+    const logBox = $('logBox');
+    let unseenLog = 0;
     const log = (msg) => {
       const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
       logEl.textContent += (logEl.textContent ? '\n' : '') + line;
       logEl.scrollTop = logEl.scrollHeight;
+      if (/^\s*(✘|⏭|⚠|Error)/.test(msg)) logBox.open = true; // problems open the log on their own
+      if (!logBox.open) { unseenLog++; $('logBadge').textContent = unseenLog > 99 ? '99+' : String(unseenLog); $('logBadge').hidden = false; }
       try { console.log('[FlowBulk]', msg); } catch (e) { /* ignore */ }
     };
+    logBox.addEventListener('toggle', () => { if (logBox.open) { unseenLog = 0; $('logBadge').hidden = true; logEl.scrollTop = logEl.scrollHeight; } });
 
     const FIELDS = {
       sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone',
@@ -1835,6 +1946,7 @@
       const m = String(settings.autoProjectId || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       settings.autoProjectId = m ? m[0].toLowerCase() : '';
       saveSettings(settings);
+      $('download').textContent = 'Download'; // a scan's count no longer applies
       if (settings.learnMode) installLearnHooks();
       scheduleAuto();
       renderStatus();
@@ -1859,21 +1971,56 @@
       setHTML(el, list.map((p) => `<label><input type="checkbox" value="${p.id}" ${sel.has(p.id) ? 'checked' : ''}> <span>${escapeHtml(p.title || '(untitled)')} <span class="muted">${p.id.slice(0, 8)}</span></span></label>`).join(''));
     }
     let creditsText = '';
+    function chip(text, kind) {
+      const el = document.createElement('span');
+      el.className = 'chip' + (kind ? ' ' + kind : '');
+      el.textContent = el.title = text;
+      return el;
+    }
     function renderStatus() {
       const wiz = getWiz();
       const cur = currentProjectId();
+      const up = settings.quality === 'upscaled';
       const doneN = Object.keys(loadDone()).length;
       const lastRun = store.get('fbd.lastRun', null);
-      let s = `${wiz.at ? 'Signed-in session detected' : 'No session token found (signed out or page still loading)'}` +
-        `${cur ? ` · project ${projectTitleFor(cur)}` : ' · not on a project page'}` +
-        ` · ${doneN} file(s) in history` +
-        ` · quality: ${settings.quality === 'upscaled' ? 'upscaled ' + settings.imageUpscale : 'original'}` +
-        `${lastRun ? ` · last run ${fmtHuman(lastRun)}` : ''}${creditsText ? ` · ${creditsText}` : ''}`;
+      const chips = [
+        wiz.at ? chip('● Signed in', 'ok') : chip('○ Not signed in (or still loading)', 'warn'),
+        cur ? chip(`Project: ${projectTitleFor(cur) || cur.slice(0, 8)}`) : chip('No project open', up ? 'warn' : ''),
+        chip(`${doneN.toLocaleString()} in history`),
+      ];
+      if (up) chips.push(chip(`Upscales 24 h: ${upscalesLast24h()}${settings.dailyUpscaleCap > 0 ? ` / ${settings.dailyUpscaleCap}` : ''}`));
+      if (creditsText) chips.push(chip(creditsText));
+      if (lastRun) chips.push(chip(`Last run ${fmtHuman(lastRun)}`));
+      $('status').replaceChildren(...chips);
       const limitAt = store.get('fbd.upscaleLimitAt', 0);
       const pauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
-      if (settings.quality === 'upscaled') s += `\nUpscales in last 24 h: ${upscalesLast24h()}${settings.dailyUpscaleCap > 0 ? ` / ${settings.dailyUpscaleCap}` : ''}`;
-      if (limitAt && Date.now() - limitAt < pauseMs) s += `\n⏸ Upscale limit hit ${fmtHuman(limitAt)} — upscaling paused until ${fmtHuman(limitAt + pauseMs)}`;
-      $('status').textContent = s;
+      const warn = $('statusWarn');
+      warn.hidden = !(limitAt && Date.now() - limitAt < pauseMs);
+      if (!warn.hidden) warn.textContent = `⏸ Flow's upscale limit was hit ${fmtHuman(limitAt)}. Upscaling is paused until ${fmtHuman(limitAt + pauseMs)} (Options → Upscaling → Reset limit pause).`;
+      renderSummaries();
+    }
+    function renderSummaries() {
+      const up = settings.quality === 'upscaled';
+      $('qUpLabel').textContent = `Upscaled ${settings.imageUpscale || '2K'}`;
+      $('qualityHint').textContent = up
+        ? `Flow upscales each picture one at a time (about ${Math.round((store.get(AVG_UP_KEY, 0) || 12000) / 1000 + (settings.upscalePauseSec || 0))} s each). Keep this project open and the tab visible; the run pauses while the tab is hidden. Videos are saved at original quality.`
+        : 'Saves the files Flow already stores, straight away.';
+      const f = [];
+      if (settings.includeUndated) f.push('undated included');
+      if (settings.keywordInclude) f.push(`prompt has "${settings.keywordInclude}"`);
+      if (settings.keywordExclude) f.push(`not "${settings.keywordExclude}"`);
+      if (settings.modelFilter) f.push(`model "${settings.modelFilter}"`);
+      if (settings.excludeUploads) f.push('no uploads');
+      if (settings.includeNotInGrid) f.push('hidden pictures included');
+      $('sumFilters').textContent = f.join(' · ') || 'none';
+      $('sumUpscale').textContent = `${settings.imageUpscale || '2K'}, ${settings.upscalePauseSec || 0} s apart` +
+        (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day` : '');
+      $('sumProjects').textContent = settings.scope === 'selected' ? `${(settings.selectedProjects || []).length} selected` : 'this project only';
+      $('sumSaving').textContent = settings.downloadMode === 'tampermonkey' ? `Downloads/${settings.subfolder || ''}${settings.folderByProject ? '/project' : ''}${settings.folderByMonth ? '/month' : ''}` : 'Downloads folder, no subfolders';
+      const a = [];
+      if (settings.autoMinutes > 0) a.push(`every ${settings.autoMinutes} min`);
+      if (settings.runOnLoadHours > 0) a.push(`on load after ${settings.runOnLoadHours} h`);
+      $('sumAuto').textContent = a.join(' · ') || 'off';
     }
     function renderLearned() {
       const l = loadLearned();
@@ -1888,21 +2035,47 @@
         (items.length > 300 ? `<div class="muted">…and ${items.length - 300} more</div>` : ''));
     }
     let prog = null, act = null, actTimer = null, runStartAt = 0;
+    function setLines(el, lines) {
+      el.replaceChildren(...lines.map(([cls, text]) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }));
+    }
+    function setBar(frac) {
+      const pct = frac == null ? '' : `${Math.round(frac * 100)}%`;
+      $('barfill').style.width = $('mBar').style.width = pct || '0%';
+      $('pPct').textContent = $('mPct').textContent = pct;
+    }
     function renderProgress() {
-      const lines = [];
-      if (prog && prog.item) lines.push(`${prog.item.kind === 'video' ? 'Video' : 'Picture'} ${prog.i + 1} of ${prog.n} · ${prog.item.title || prog.item.mediaId.slice(0, 8)}`);
-      else if (prog && prog.text) lines.push(prog.text);
+      const full = [], mini = [];
+      let count = '';
+      if (prog && prog.item) {
+        count = `${prog.i + 1} / ${prog.n}`;
+        const what = `${prog.item.kind === 'video' ? 'Video' : 'Picture'} · ${prog.item.title || prog.item.mediaId.slice(0, 8)}`;
+        full.push(['item', what]); mini.push(['item', what]);
+      } else if (prog && prog.text) {
+        full.push(['msg', prog.text]); mini.push(['msg', prog.text.split('\n')[0]]);
+      } else {
+        full.push(['msg', 'Ready. Scan lists what would be downloaded without saving anything; Download starts saving.']);
+      }
       if (act) {
         const now = Date.now();
         const t = act.until ? ` ${Math.max(0, Math.ceil((act.until - now) / 1000))} s left` : (now - act.at >= 2000 ? ` ${Math.floor((now - act.at) / 1000)} s` : '');
-        lines.push(`→ ${act.text}${t}`);
+        full.push(['step', `→ ${act.text}${t}`]); mini.push(['step', `→ ${act.text}${t}`]);
       }
+      let eta = '', each = '';
       if (prog && prog.item && prog.n - prog.i > 1) {
-        const left = prog.perMs * (prog.n - prog.i) - (Date.now() - prog.at);
-        const d = fmtDuration(left);
-        lines.push(`${d === 'under a minute' ? 'Less than a minute' : 'About ' + d} left (≈${Math.round(prog.perMs / 1000)} s per item)`);
+        const d = fmtDuration(prog.perMs * (prog.n - prog.i) - (Date.now() - prog.at));
+        eta = `${d === 'under a minute' ? 'Less than a minute' : 'About ' + d} left`;
+        each = ` (≈${Math.round(prog.perMs / 1000)} s each)`;
       }
-      $('progress').textContent = lines.join('\n');
+      const c = prog && prog.counts;
+      const tally = c && (c.ok || c.fail || c.deferred) ? `✔ ${c.ok} saved${c.fail ? ` · ✘ ${c.fail} failed` : ''}${c.deferred ? ` · ⏭ ${c.deferred} deferred` : ''}` : '';
+      if (eta || tally) {
+        full.push(['eta', [eta && eta + each, tally].filter(Boolean).join(' · ')]);
+        mini.push(['eta', [eta, tally].filter(Boolean).join(' · ')]);
+      }
+      setLines($('progress'), full); setLines($('mLines'), mini);
+      $('card').classList.toggle('idle', !count && !$('pPct').textContent); // no bar for idle or scan text
+      $('pCount').textContent = $('mCount').textContent = count;
+      $('pCount').hidden = !count;
     }
     activity = (text, opts) => {
       act = text ? { text, at: Date.now(), until: opts && opts.untilMs ? Date.now() + opts.untilMs : 0 } : null;
@@ -1910,27 +2083,106 @@
       if (!act && actTimer) { clearInterval(actTimer); actTimer = null; }
       renderProgress();
     };
-    function progress(i, n, item) {
-      $('barfill').style.width = n ? `${Math.round((i / n) * 100)}%` : '0%';
+    function progress(i, n, item, counts) {
+      setBar(n ? i / n : 0);
       if (i === 0 || !runStartAt) runStartAt = Date.now();
       const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0));
-      prog = item ? { i, n, item, perMs, at: Date.now() } : null;
+      prog = item ? { i, n, item, perMs, at: Date.now(), counts } : null;
       renderProgress();
     }
     function finish(text, frac) {
-      if (frac != null) $('barfill').style.width = `${Math.round(frac * 100)}%`;
+      if (frac != null) setBar(frac);
       prog = { text }; runStartAt = 0;
+      const m = /(\d+) saved, (\d+) failed/.exec(text);
+      $('fabBadge').textContent = m ? `✔ ${m[1]}${m[2] !== '0' ? ` ✘ ${m[2]}` : ''}` : '!';
+      $('fab').title = text;
       activity(null);
     }
-    function setRunning(on) {
+
+    // Views: the round button, the full panel, or (during a run) a short card that sits
+    // below Chrome's download pop-up, which covers the top-right of the page.
+    const POS_KEY = 'fbd.uiPos';
+    let view = 'closed', viewBeforeRun = 'open', compactRun = false;
+    let pos = store.get(POS_KEY, null) || { right: 16, bottom: 16 };
+    function fitToViewport(dragging) {
+      const w = host.offsetWidth || 160, h = host.offsetHeight || 48;
+      pos.right = Math.max(0, Math.min(pos.right, innerWidth - w));
+      if (dragging) pos.bottom = Math.max(0, Math.min(pos.bottom, innerHeight - h));
+      host.style.right = `${pos.right}px`;
+      host.style.bottom = `${Math.max(0, Math.min(pos.bottom, innerHeight - h - 8))}px`;
+    }
+    function setView(v) {
+      view = v;
+      panel.classList.toggle('on', v === 'open');
+      $('mini').classList.toggle('on', v === 'mini');
+      $('fab').classList.toggle('on', v === 'closed');
+      if (v === 'open') { $('fabBadge').hidden = true; renderProjects(); renderLearned(); renderStatus(); }
+      fitToViewport();
+    }
+    function makeDraggable(handle) {
+      handle.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0 || ev.target.closest('button')) return;
+        const r0 = host.getBoundingClientRect();
+        const sx = ev.clientX, sy = ev.clientY, right0 = innerWidth - r0.right, bottom0 = innerHeight - r0.bottom;
+        handle.setPointerCapture(ev.pointerId);
+        const move = (e) => { pos = { right: right0 - (e.clientX - sx), bottom: bottom0 - (e.clientY - sy) }; fitToViewport(true); };
+        const up = () => {
+          handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up);
+          store.set(POS_KEY, pos);
+        };
+        handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+      });
+      handle.addEventListener('dblclick', (ev) => {
+        if (ev.target.closest('button')) return;
+        pos = { right: 16, bottom: 16 }; store.set(POS_KEY, pos); fitToViewport();
+      });
+    }
+    makeDraggable($('dragPanel')); makeDraggable($('dragMini'));
+    window.addEventListener('resize', () => fitToViewport());
+
+    function showTab(name) {
+      if (!root.querySelector(`.pane[data-pane="${name}"]`)) name = 'main';
+      for (const t of root.querySelectorAll('.tab')) t.classList.toggle('on', t.dataset.tab === name);
+      for (const p of root.querySelectorAll('.pane')) p.classList.toggle('on', p.dataset.pane === name);
+      store.set('fbd.tab', name);
+    }
+    for (const t of root.querySelectorAll('.tab')) t.addEventListener('click', () => showTab(t.dataset.tab));
+    showTab(store.get('fbd.tab', 'main'));
+    renderProgress();
+
+    /** compact: shrink to the run card while this run goes (downloads, not scans). */
+    function setRunning(on, compact) {
       for (const id of ['scan', 'download', 'test1', 'markDone']) $(id).disabled = on;
-      $('stop').disabled = !on;
+      $('stop').disabled = $('mStop').disabled = !on;
+      $('stop').hidden = !on; $('download').hidden = on;
+      if (on) { prog = { text: 'Starting…' }; setBar(0); renderProgress(); }
+      if (on && compact) {
+        compactRun = true; viewBeforeRun = view;
+        showTab('main'); setView('mini');
+      } else if (!on && compactRun) {
+        compactRun = false;
+        if (view === 'mini') setView(viewBeforeRun === 'closed' ? 'closed' : 'open');
+        if (view === 'closed') $('fabBadge').hidden = false;
+      }
+      $('minimize').hidden = !(on && compactRun);
       renderStatus();
     }
     const ui = { log, renderItems, progress, setRunning, finish };
+    function requestStop() { stopFlag = true; log('Stopping after the current file…'); activity('Stopping after the current file…'); }
 
-    $('fab').addEventListener('click', () => { panel.classList.toggle('open'); if (panel.classList.contains('open')) { renderProjects(); renderLearned(); renderStatus(); } });
-    $('close').addEventListener('click', () => panel.classList.remove('open'));
+    $('fab').addEventListener('click', () => setView(running && compactRun ? 'mini' : 'open'));
+    $('close').addEventListener('click', () => setView(running && compactRun ? 'mini' : 'closed'));
+    $('minimize').addEventListener('click', () => setView('mini'));
+    $('expand').addEventListener('click', () => setView('open'));
+    $('mStop').addEventListener('click', requestStop);
+    $('popupTip').hidden = !!store.get('fbd.hidePopupTip', false);
+    $('tipHide').addEventListener('click', () => { store.set('fbd.hidePopupTip', true); $('popupTip').hidden = true; });
+    $('copyLog').addEventListener('click', (ev) => {
+      ev.preventDefault(); // the button sits in the log's summary; do not fold it
+      const btn = ev.currentTarget;
+      const done = (t) => { btn.textContent = t; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); };
+      try { navigator.clipboard.writeText(logEl.textContent).then(() => done('Copied'), () => done('Copy failed')); } catch (e) { done('Copy failed'); }
+    });
     $('refreshProjects').addEventListener('click', () => { readForm(); renderProjects(); log('Project list refreshed from this page.'); });
     for (const id of Object.values(FIELDS).concat(['scopeCurrent', 'scopeSelected', 'qOriginal', 'qUpscaled'])) $(id).addEventListener('change', readForm);
     $('projects').addEventListener('change', readForm);
@@ -1943,16 +2195,18 @@
         const f = filterItems(s.items, settings);
         log(`Would download ${f.keep.length} item(s). Skipped: ${skipSummary(f)}.`);
         const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0)))} at the current pacing)` : '';
-        $('barfill').style.width = '0%';
+        setBar(null);
         finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}${est}.\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
         renderItems(f.keep);
-        try { $('items').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+        $('itemsBox').open = f.keep.length > 0;
+        $('download').textContent = f.keep.length ? `Download ${f.keep.length}` : 'Download';
+        try { $('itemsBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
       } catch (e) { log(`Error: ${e.message}`); finish(`Error: ${e.message}`); }
       finally { running = false; setRunning(false); }
     });
-    $('download').addEventListener('click', () => { readForm(); setRunning(true); runDownload(settings, ui); });
-    $('test1').addEventListener('click', () => { readForm(); setRunning(true); runDownload(settings, ui, { limit: 1 }); });
-    $('stop').addEventListener('click', () => { stopFlag = true; log('Stopping after the current file…'); activity('Stopping after the current file…'); });
+    $('download').addEventListener('click', () => { readForm(); setRunning(true, true); runDownload(settings, ui); });
+    $('test1').addEventListener('click', () => { readForm(); setRunning(true, true); runDownload(settings, ui, { limit: 1 }); });
+    $('stop').addEventListener('click', requestStop);
     $('resetLimit').addEventListener('click', () => { store.set('fbd.upscaleLimitAt', 0); renderStatus(); log('Upscale limit pause reset.'); });
     $('refreshLearned').addEventListener('click', () => { if (!settings.learnMode) { log('Turn on "Learn from my clicks" first.'); return; } learnedNow(); renderLearned(); log('Learned values refreshed from what the page did since Learn mode was enabled.'); });
     $('applyLearned').addEventListener('click', () => {
@@ -2011,7 +2265,7 @@
           if (running) return;
           if (!getWiz().at) { log('Auto-check skipped: no session token (signed out?).'); return; }
           log(`Auto-check (every ${settings.autoMinutes} min)…`);
-          setRunning(true); runDownload(settings, ui);
+          setRunning(true, true); runDownload(settings, ui);
         }, settings.autoMinutes * 60000);
       }
     }
@@ -2039,24 +2293,24 @@
         log('Run on load: Upscaled mode needs a project page; set an Auto project in Automation.');
         return;
       }
-      panel.classList.add('open');
+      setView('open');
       log(`Run on load: last run ${last ? fmtHuman(last) : 'never'} — starting in 8 s (press Stop to cancel)…`);
       let cancelled = false;
-      const onStop = () => { cancelled = true; log('Run on load cancelled.'); };
-      $('stop').disabled = false; $('stop').addEventListener('click', onStop, { once: true });
+      const onStop = () => { cancelled = true; log('Run on load cancelled.'); setRunning(false); };
+      $('stop').disabled = false; $('stop').hidden = false; $('download').hidden = true; $('stop').addEventListener('click', onStop, { once: true });
       setTimeout(async () => {
         $('stop').removeEventListener('click', onStop);
         if (cancelled || running) return;
         await waitUntil(() => getWiz().at, 20000, 500);
-        if (!getWiz().at) { log('Run on load: no session token; skipping.'); $('stop').disabled = true; return; }
-        setRunning(true); runDownload(settings, ui);
+        if (!getWiz().at) { log('Run on load: no session token; skipping.'); setRunning(false); return; }
+        setRunning(true, true); runDownload(settings, ui);
       }, 8000);
     })();
 
     // Keep the project list fresh as the SPA navigates.
     let lastPath = location.pathname;
     setInterval(() => {
-      if (location.pathname !== lastPath) { lastPath = location.pathname; discoverProjectsFromDom(); if (panel.classList.contains('open')) { renderProjects(); renderStatus(); } }
+      if (location.pathname !== lastPath) { lastPath = location.pathname; discoverProjectsFromDom(); if (view === 'open') { renderProjects(); renderStatus(); } }
     }, 1500);
     setTimeout(discoverProjectsFromDom, 4000);
   }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.6 — 2026-10-23
+
+- **Cleaner, tabbed panel.** A status strip at the top (signed in, project, history count, upscales in the last 24 h), then three tabs: **Download** (dates, type, quality, buttons, progress card), **Options** (filters, upscaling, projects, saving, automation, each heading showing its current settings) and **Tools** (history, exports, backup, Diagnose, Learn, Advanced).
+- **Progress card** with a big "3 / 11" count, bar, the current step, time left and a saved/failed/deferred tally. After a scan, the Download button shows how many items it would fetch.
+- **Small run card during downloads.** The panel shrinks to a short card in the bottom corner so Chrome's download pop-up (top right) no longer covers the progress. ⤢ opens the full panel; it comes back by itself when the run ends.
+- **Drag the panel** by its header; it remembers the spot (double-click the header to reset).
+- **Log folded by default** with a new-lines badge; it opens on its own when something fails or is deferred, and has a Copy button.
+- A hideable tip explains how to turn off Chrome's download pop-up.
+
 ## 0.3.5 — 2026-10-23
 
 - **Upscaled mode no longer re-scrolls the whole grid for every picture.** Flow's grid is virtual and sorted newest first by a timestamp in the listing, so the script jumps straight to where each picture should be and corrects from the tiles on screen (on a real 5,500-tile project every test picture was found within two jumps, in 1–6 s). Pictures Flow does not show in the grid are recognised quickly instead of after a full sweep; the full sweep remains only as a fallback.

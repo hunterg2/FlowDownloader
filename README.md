@@ -23,15 +23,38 @@ session, exactly like the Flow web app does.
 4. Open **https://flow.google.com** (signed in). A blue **⬇ Flow Export** button appears
    bottom-right.
 
+## The panel
+
+- The top strip shows, at a glance, whether you are signed in, which project is open, how
+  many files are in the download history and, in Upscaled mode, how many upscales were used
+  in the last 24 h.
+- **Download** tab: the date range, pictures/videos, quality, the buttons and a progress
+  card. The progress card shows the item it is on, the current step, the time left and how
+  many items were saved, failed or deferred.
+- **Options** tab: filters, upscaling, projects, saving and automation. Each section's
+  heading shows its current settings, so you don't need to open it to check.
+- **Tools** tab: history, exports and backup, Diagnose, credits, Learn mode and the advanced
+  RPC settings.
+- **Log**: folded by default, with a count of new lines. It opens on its own when something
+  fails or is deferred. **Copy** puts it on the clipboard.
+- **During a download** the panel shrinks to a small card in the bottom corner, with the
+  count, bar, current step and time left. This keeps it below Chrome's download pop-up,
+  which covers the top-right of the page. Click ⤢ to open the full panel (▁ shrinks it again). It
+  returns to the full panel when the run ends.
+- **Move it** by dragging the header. It remembers the spot; double-click the header to put
+  it back in the corner.
+- To stop Chrome's download pop-up appearing at all: Chrome Settings → Downloads → turn off
+  "Show downloads when they're done". Files still save normally.
+
 ## First run
 
-1. Open a project. Click **⬇ Flow Export**, set **Since**, tick **Images** (and **Videos**
+1. Open a project. Click **⬇ Flow Export**, set **From**, tick **Pictures** (and **Videos**
    if wanted).
-2. Click **Scan (dry run)** to see what matches without downloading anything: a summary
-   appears under the buttons (what would be saved or upscaled and roughly how long it takes)
-   and the matching items are listed at the bottom of the panel. Then click **Test 1 picture**. If that file lands
-   correctly, click **Download**. The first time, Chrome asks once to allow this site to
-   download multiple files → **Allow**.
+2. Click **Scan** to see what matches without downloading anything: the progress card
+   shows what would be saved or upscaled and roughly how long it takes, the Download button
+   shows the count, and the matching items are listed below. Then click **Test 1**. If that
+   file lands correctly, click **Download**. The first time, Chrome asks once to allow this
+   site to download multiple files → **Allow**.
 3. Files are named `YYYY-MM-DD_HH-MM-SS - <prompt> - <id>.jpg|png|mp4` (or prompt first,
    your choice) so they sort by creation time.
 
@@ -41,7 +64,7 @@ only new items are fetched.
 ## Upscaled pictures (2K / 4K)
 
 Flow's "2K / 4K Upscaled" download is not a stored file: Flow upscales on demand through a
-reCAPTCHA-protected call that only its own page code can make. So **Picture quality →
+reCAPTCHA-protected call that only its own page code can make. So **Quality →
 Upscaled** drives Flow's own UI: it finds each picture's tile in the project grid (scrolling
 the grid if needed), opens the tile's menu, picks *Download → 2K/4K Upscaled*, and lets Flow
 do the upscale and the download. When it can intercept the file it saves it under the normal
@@ -51,17 +74,18 @@ records it as done.
 Because Flow throttles downloads and caps upscales per day, this mode is deliberately slow
 and careful:
 
-- The line under the buttons shows which picture it is on, the current step (finding the
-  tile, Flow upscaling, waiting before the next one) and about how long the run has left.
-- Strictly one picture at a time, waiting for each file to finish. Use *Mode → Tampermonkey*
+- The progress card (or the small run card) shows which picture it is on, the current step
+  (finding the tile, Flow upscaling, waiting before the next one) and about how long the run
+  has left.
+- Strictly one picture at a time, waiting for each file to finish. Use *Save with → Tampermonkey*
   for a real "saved to disk" signal; plain browser downloads only get a size-based wait.
 - **Pause between upscales** (default 8 s). **Max per run** budgets a single run.
 - **Daily cap**: if you know Flow's limit, enter it and the script stops *before* Flow
-  refuses, using its own count of upscales in the last 24 h (shown in the status line).
+  refuses, using its own count of upscales in the last 24 h (shown in the top strip).
 - Flow's toasts are watched. "Upscale failed" → the original is saved instead (if the
   fallback box is ticked) and the picture is not retried for upscaling. A daily-limit
   message → **On daily limit** decides: stop the run (default) or continue with originals.
-  Either way upscaling pauses for the configured hours (default 24); *Reset limit pause*
+  Either way upscaling pauses for the configured hours (default 24); *Reset limit pause* (Options → Upscaling)
   overrides.
 - Pictures whose tile or menu cannot be reached are **deferred** (nothing downloaded) and
   retried next run. Three failures in a row pause two minutes; six stop the run.
@@ -74,21 +98,21 @@ videos are always saved at original quality.
 
 ## Learn mode (when Flow changes)
 
-Google renames internal RPC ids and menu labels with frontend builds. Under **Learn &
-tools**, tick **Learn from my clicks**, then download one picture by hand the way you
+Google renames internal RPC ids and menu labels with frontend builds. Under **Tools → Learn
+from my clicks**, tick the box, then download one picture by hand the way you
 normally would (hover → menu → Download → 2K Upscaled). Click **Refresh learned**: the box
 shows the RPC ids and labels the page actually used. **Apply learned to Advanced** writes
-them into the settings, and **Test 1 picture** confirms. The learned values are also included
+them into the settings, and **Test 1** confirms. The learned values are also included
 in the Diagnose export.
 
 ## Folders, manifest and prompt sidecars
 
-Under **Saving & folders**:
+Under **Options → Saving & folders**:
 
-- The default *Mode → Browser download* saves every file straight into your browser's
+- The default *Save with → Browser download* saves every file straight into your browser's
   Downloads folder, with no subfolders; **Base folder** and the folder options only apply in
   Tampermonkey mode. Sort Downloads by date to find them.
-- *Mode → Tampermonkey* saves into `Downloads/<Base folder>/<Project>/<YYYY-MM>/…` when
+- *Save with → Tampermonkey* saves into `Downloads/<Base folder>/<Project>/<YYYY-MM>/…` when
   **Folder per project** / **Folder per month** are ticked. Tampermonkey may ask you once to
   whitelist file extensions (Dashboard → Settings → Downloads BETA: add
   `jpg png webp mp4 txt json csv`). If that mode fails for a file, the script falls back to a
@@ -96,14 +120,14 @@ Under **Saving & folders**:
 - **Prompt sidecar** writes a `.txt` (prompt, date, project, model, quality) or `.json`
   (full metadata) next to each file.
 - **CSV manifest after each run** writes `manifest-<timestamp>.csv` with media id, project,
-  prompt, created time, kind, model, quality, filename, size and status. **Export full
-  manifest** (CSV or JSON) dumps everything ever saved.
+  prompt, created time, kind, model, quality, filename, size and status. **Tools → Manifest**
+  (CSV or JSON) dumps everything ever saved.
 
 ## Filters
 
-**What to download** supports, besides the date range and types: **Prompt contains** /
+**Options → Filters** narrows the date range and types further: **Prompt contains** /
 **but not** (comma-separated terms, OR'd; wrap a term in `/slashes/` for a regex), **Model
-contains** (e.g. `NARWHAL`, `GEM_PIX`, `veo`, `abra`), and **Exclude my uploaded reference
+contains** (e.g. `NARWHAL`, `GEM_PIX`, `veo`, `abra`), and **Leave out my uploaded reference
 images** (experimental: skips items that have no generation record).
 
 Only pictures shown in the project grid are downloaded by default. Flow's listing also
@@ -152,11 +176,11 @@ Flow clients have mapped and which are **not** CAPTCHA-gated:
 Requests are signed the same way the page signs its own (session cookies plus the page's
 `at` / `f.sid` / `bl` tokens). Upscales go through Flow's own menu, so Flow's page code does
 the reCAPTCHA and the upscale; the script only automates the clicks, paces them and watches
-the outcome. The ids above live under **Advanced** and can be changed or learned.
+the outcome. The ids above live under **Tools → Advanced** and can be changed or learned.
 
 ## If something breaks
 
-1. Click **Scan**, then **Diagnose**. A `flow-bulk-diagnose-….json` file is saved with a
+1. Click **Scan**, then **Tools → Diagnose**. A `flow-bulk-diagnose-….json` file is saved with a
    trimmed, *redacted* sample of what Flow returned (signed URLs, tokens and ids removed),
    the tile markup, the menu texts last seen, recent toasts and learned values.
 2. Try **Learn mode** (above) if the menu labels or RPC ids moved.
@@ -170,7 +194,7 @@ look for a line starting with `[Flow Bulk Downloader]`.
 
 Common messages: *"No session token on this page"* → reload the Flow tab (signed out?).
 *"Flow answered with an HTML page"* → sign in again. *"no Download entry in the tile
-menu: …"* → the menu texts are listed; set **Download menu label** under Advanced or use
+menu: …"* → the menu texts are listed; set **Download menu label** under Tools → Advanced or use
 Learn mode.
 
 ## Alternatives worth knowing
