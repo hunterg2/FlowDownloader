@@ -318,4 +318,22 @@ test('run estimate, duration text and match description', () => {
   assert.equal(H.describeMatches([], st), 'Nothing matches');
 });
 
+test('pictures and videos each have their own quality', () => {
+  const both = { quality: 'upscaled', videoQuality: 'upscaled', imageUpscale: '2K', videoUpscale: '1080p', upscalePauseSec: 0, delayMs: 0 };
+  const vidsOnly = Object.assign({}, both, { quality: 'original' });
+  assert.equal(H.wantsUpscale('image', both), true);
+  assert.equal(H.wantsUpscale('video', both), true);
+  assert.equal(H.wantsUpscale('image', vidsOnly), false);
+  assert.equal(H.wantsUpscale('video', { quality: 'upscaled' }), false);
+  assert.equal(H.wantsUpscale('unknown', both), false);
+  assert.equal(H.anyUpscale(vidsOnly), true);
+  assert.equal(H.anyUpscale({ quality: 'original', videoQuality: 'original' }), false);
+  assert.equal(H.pickUpscaleSize('video', both), '1080p');
+  assert.equal(H.pickUpscaleSize('image', both), '2K');
+  const items = [{ kind: 'image' }, { kind: 'video' }, { kind: 'video' }];
+  assert.equal(H.describeMatches(items, both), '1 picture would be upscaled to 2K, 2 videos would be upscaled to 1080p');
+  assert.equal(H.describeMatches(items, vidsOnly), '1 picture saved at original quality, 2 videos would be upscaled to 1080p');
+  assert.equal(H.estimateRunMs(items, vidsOnly, 10000, 40000), 1500 + 2 * (40000 + 3000));
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

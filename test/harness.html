@@ -160,6 +160,9 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
     t.innerHTML = __H(`<img class="thumbnail" alt=""><div class="hotbar"><button aria-label="More options">⋮</button></div>`);
     t.querySelector('button').addEventListener('click', (e) => {
       activeTile = t; const r = e.target.getBoundingClientRect();
+      submenu.innerHTML = __H(isVideoAt(i) // Flow's video menu (verified 2026-10-23): GIF, 720p original, 1080p and 4K upscaled
+        ? '<div role="menuitem" data-res="GIF">270p Animated GIF</div><div role="menuitem" data-res="720p">720p Original size</div><div role="menuitem" data-res="1080p">1080p Upscaled</div><div role="menuitem" data-res="4Kv" aria-disabled="true" style="opacity:.4">4K Upscaled</div>'
+        : '<div role="menuitem" data-res="1K">1K Original</div><div role="menuitem" data-res="2K">2K Upscaled</div><div role="menuitem" data-res="4K" aria-disabled="true" style="opacity:.4">4K Upscaled</div>');
       menu.style.left = r.left + 'px'; menu.style.top = (r.bottom + 4) + 'px'; menu.style.display = 'block'; submenu.style.display = 'none';
     });
     grid.appendChild(t);
@@ -188,7 +191,8 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
     const res = item.dataset.res; const i = +activeTile.dataset.i;
     menu.style.display = 'none'; submenu.style.display = 'none';
     hlog(`FLOW download tile ${i} at ${res}`);
-    if (res !== '1K') {
+    const isVideo = isVideoAt(i);
+    if (res !== '1K' && res !== '720p' && res !== 'GIF') {
       upscaleAttempts++;
       await window.fetch(`/_/AiSandboxAngularFrontend/data/batchexecute?rpcids=SPrCad&_=${Date.now()}`, { method: 'POST', body: 'f.req=x' }).catch(() => {});
       await new Promise((r) => setTimeout(r, 300));
@@ -196,10 +200,11 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
       if (upscaleOk >= 3) { toast("You've reached your daily limit of upscaled downloads. Try again tomorrow."); return; }
       upscaleOk++;
     }
-    const size = res === '1K' ? 60000 : 180000;
-    const bytes = new Uint8Array(size); bytes.set([0xff,0xd8,0xff,0xe0]);
-    const blob = new Blob([bytes], { type: 'image/jpeg' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Flow_${res}_${i}.jpg`; document.body.appendChild(a); a.click(); a.remove();
+    if (isVideo && res === '1080p') await new Promise((r) => setTimeout(r, 2500)); // video upscales take longer
+    const size = res === '1K' || res === '720p' ? 60000 : 180000;
+    const bytes = new Uint8Array(size); bytes.set(isVideo ? [0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70] : [0xff, 0xd8, 0xff, 0xe0]);
+    const blob = new Blob([bytes], { type: isVideo ? 'video/mp4' : 'image/jpeg' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Flow_${res}_${i}.${isVideo ? 'mp4' : 'jpg'}`; document.body.appendChild(a); a.click(); a.remove();
   });
 </script>
 <script>document.write(__H('<script src="/flow-bulk-downloader.user.js?v=' + Date.now() + '"><\/script>')); // cache-bust so edits show up on reload</script>

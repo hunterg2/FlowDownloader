@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.7
+// @version      0.3.8
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -45,8 +45,8 @@
   Flow's "2K / 4K Upscaled" image download is computed on demand by a
   reCAPTCHA-protected RPC that only Flow's own page code can call. So for
   "Upscaled" quality the script drives Flow's own UI: it finds each picture's
-  tile in the project grid, opens the tile's Download menu and picks the
-  upscaled entry. Flow performs the upscale and the download; the script paces
+  (or video's) tile in the project grid, opens the tile's Download menu and picks
+  the upscaled entry (2K for pictures, 1080p for videos). Flow performs the upscale and the download; the script paces
   the clicks, waits for each file, watches Flow's toasts for "upscale failed"
   and the daily limit, and renames the file when it can intercept it.
 
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.7';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.8';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -469,13 +469,19 @@
     list.sort((a, b) => key(b) - key(a));
     return new Map(list.map((i, n) => [i.mediaId, n]));
   }
+  /** Whether an item of this kind is to be upscaled: pictures and videos each have their own quality. */
+  function wantsUpscale(kind, settings) {
+    return kind === 'video' ? settings.videoQuality === 'upscaled' : kind === 'image' && settings.quality === 'upscaled';
+  }
+  function anyUpscale(settings) { return settings.quality === 'upscaled' || settings.videoQuality === 'upscaled'; }
   /** Rough duration of a run over these items with the current pacing, in ms. */
-  function estimateRunMs(items, settings, avgUpscaleMs) {
+  function estimateRunMs(items, settings, avgUpscaleMs, avgVideoUpscaleMs) {
     const delay = Math.max(0, settings.delayMs || 0);
-    const perUp = (avgUpscaleMs || 12000) + 3000 + Math.max(0, settings.upscalePauseSec || 0) * 1000 + delay;
+    const extra = 3000 + Math.max(0, settings.upscalePauseSec || 0) * 1000 + delay;
+    const perUp = (avgUpscaleMs || 12000) + extra, perVideoUp = (avgVideoUpscaleMs || 45000) + extra;
     const perOrig = 1500 + delay;
     let ms = 0;
-    for (const it of items) ms += settings.quality === 'upscaled' && it.kind === 'image' ? perUp : perOrig;
+    for (const it of items) ms += !wantsUpscale(it.kind, settings) ? perOrig : it.kind === 'video' ? perVideoUp : perUp;
     return ms;
   }
   function fmtDuration(ms) {
@@ -488,8 +494,9 @@
     if (!items.length) return 'Nothing matches';
     const vids = items.filter((i) => i.kind === 'video').length, pics = items.length - vids;
     const n = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
-    if (settings.quality === 'upscaled') {
-      return [pics ? `${n(pics, 'picture')} would be upscaled to ${settings.imageUpscale}` : '', vids ? `${n(vids, 'video')} saved at original quality` : ''].filter(Boolean).join(', ');
+    if (anyUpscale(settings)) {
+      const how = (kind, size) => (wantsUpscale(kind, settings) ? `would be upscaled to ${size}` : 'saved at original quality');
+      return [pics ? `${n(pics, 'picture')} ${how('image', settings.imageUpscale)}` : '', vids ? `${n(vids, 'video')} ${how('video', settings.videoUpscale)}` : ''].filter(Boolean).join(', ');
     }
     return `${[pics ? n(pics, 'picture') : '', vids ? n(vids, 'video') : ''].filter(Boolean).join(' and ')} would be downloaded`;
   }
@@ -498,7 +505,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, fmtDuration, describeMatches,
+    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, anyUpscale, pickUpscaleSize,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -516,7 +523,7 @@
     sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true,
     keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeNotInGrid: false,
     // quality
-    quality: 'original', imageUpscale: '2K', upscaleLabel: 'Upscal', fallbackOriginal: true, upscaleTimeoutSec: 120,
+    quality: 'original', imageUpscale: '2K', videoQuality: 'original', videoUpscale: '1080p', upscaleLabel: 'Upscal', fallbackOriginal: true, upscaleTimeoutSec: 120,
     upscalePauseSec: 8, maxUpscalesPerRun: 0, dailyUpscaleCap: 0, onLimit: 'stop', limitPauseHours: 24,
     // projects
     scope: 'current', selectedProjects: [], extraProjects: '',
@@ -689,6 +696,7 @@
   // opts.untilMs shows a countdown instead of the time spent so far.
   let activity = () => {};
   const AVG_UP_KEY = 'fbd.avgUpscaleMs';
+  const AVG_UP_VIDEO_KEY = 'fbd.avgVideoUpscaleMs';
   async function pacedSleep(ms) { const end = Date.now() + ms; while (Date.now() < end && !stopFlag) await sleep(Math.min(250, end - Date.now())); }
 
   // Flow only draws its grid while the tab is visible and Chrome throttles hidden tabs, so an
@@ -1040,8 +1048,10 @@
 
   let lastMenuTexts = [];
   const resRank = (t) => { const m = t.match(/(\d+)\s*(k|p)\b/i); if (!m) return 0; const n = parseInt(m[1], 10); return m[2].toLowerCase() === 'k' ? n * 1000 : n; };
-  function pickResolutionItem(items, settings) {
-    const wantRes = String(settings.imageUpscale || '2K');
+  /** The upscaled size wanted for this kind of item. */
+  function pickUpscaleSize(kind, settings) { return kind === 'video' ? String(settings.videoUpscale || '1080p') : String(settings.imageUpscale || '2K'); }
+  function pickResolutionItem(items, settings, kind) {
+    const wantRes = pickUpscaleSize(kind, settings);
     const labelRe = new RegExp(escapeRe(settings.upscaleLabel || 'upscal'), 'i');
     const isDisabled = (el) => !!el.disabled || el.getAttribute('aria-disabled') === 'true';
     const notGif = items.filter((el) => !/gif/i.test(textOf(el)) && !isDisabled(el)); // e.g. 4K locked behind "Upgrade"
@@ -1051,7 +1061,7 @@
   }
   function armDownloadCapture() {
     const W = PAGE;
-    const state = { blob: null, blobUrl: null, anchor: null, waiters: [] };
+    const state = { blob: null, blobUrl: null, anchor: null, link: null, waiters: [] };
     const notify = () => { for (const w of state.waiters.splice(0)) w(); };
     let origCreate = null, origClick = null;
     try {
@@ -1067,6 +1077,7 @@
       W.HTMLAnchorElement.prototype.click = function () {
         try {
           if (this.hasAttribute('download') && /^(blob|data):/.test(this.href || '')) { state.anchor = { href: this.href, name: this.getAttribute('download') }; notify(); return; }
+          if (this.hasAttribute('download') || /flow-content\.google|googleusercontent\.com|storage\.googleapis\.com/.test(this.href || '')) { state.link = true; notify(); } // Flow saves this one itself
         } catch (e) { /* ignore */ }
         return origClick.apply(this, arguments);
       };
@@ -1075,7 +1086,7 @@
       canSuppress: !!origClick, state,
       wait(ms) {
         return new Promise((res) => {
-          if (state.anchor) return res(state);
+          if (state.anchor || state.link) return res(state);
           const t = setTimeout(() => res(state), ms);
           state.waiters.push(() => { clearTimeout(t); setTimeout(() => res(state), state.anchor ? 0 : 400); });
         });
@@ -1116,14 +1127,14 @@
       let chosenText = 'direct download', upscaled = false;
       if (sub) {
         lastMenuTexts = sub.map(textOf);
-        const chosen = pickResolutionItem(sub, settings);
+        const chosen = pickResolutionItem(sub, settings, item.kind);
         if (!chosen) { pressEscape(); throw new Error('no upscaled entry found in: ' + lastMenuTexts.join(' | ')); }
         chosenText = textOf(chosen); upscaled = true;
         hoverEl(chosen); clickEl(chosen);
       }
-      const shownSize = (chosenText.match(/\d+\s*K/i) || [settings.imageUpscale])[0].replace(/\s+/g, '');
+      const shownSize = (chosenText.match(/\d+\s*[kp]\b/i) || [pickUpscaleSize(item.kind, settings)])[0].replace(/\s+/g, '');
       activity(upscaled ? `Flow is upscaling to ${shownSize}…` : 'Waiting for Flow\'s download…');
-      const timeoutMs = Math.max(10, settings.upscaleTimeoutSec || 120) * 1000;
+      const timeoutMs = Math.max(10, settings.upscaleTimeoutSec || 120) * 1000 * (item.kind === 'video' ? 3 : 1); // video upscales take longer
       const deadline = Date.now() + timeoutMs;
       let signal = null;
       const checkToasts = () => {
@@ -1136,13 +1147,14 @@
         if (stopFlag) { pressEscape(); throw new Error('stopped by user'); }
         const st = await capture.wait(Math.min(1500, Math.max(50, deadline - Date.now())));
         checkToasts();
-        if (st.anchor || st.blob) { signal = 'file'; break; }
+        if (st.anchor || st.blob || st.link) { signal = 'file'; break; }
         if (upscaleCallsSince(t0, settings).length) { signal = 'rpc'; await capture.wait(5000); checkToasts(); break; }
       }
       pressEscape();
-      if (signal && upscaled) { const d = Date.now() - t0; const avg = store.get(AVG_UP_KEY, 0); store.set(AVG_UP_KEY, Math.round(avg ? avg * 0.7 + d * 0.3 : d)); }
+      const avgKey = item.kind === 'video' ? AVG_UP_VIDEO_KEY : AVG_UP_KEY;
+      if (signal && upscaled) { const d = Date.now() - t0; const avg = store.get(avgKey, 0); store.set(avgKey, Math.round(avg ? avg * 0.7 + d * 0.3 : d)); }
       if (signal) activity('Saving the file…');
-      if (!signal) throw new UpscaleDeferError(`no completion signal within ${timeoutMs / 1000}s after choosing "${chosenText}" (Flow may still be working; the picture stays queued)`);
+      if (!signal) throw new UpscaleDeferError(`no completion signal within ${timeoutMs / 1000}s after choosing "${chosenText}" (Flow may still be working; it stays queued)`);
       const st = capture.state;
       const tag = chosenText.replace(/[^\w\s-]/g, '').trim();
       const qualityLabel = upscaled ? (tag || 'upscaled') : 'original';
@@ -1271,7 +1283,7 @@
         if (until != null && it.createdMs > until) { out.skippedDate++; continue; }
       }
       if (settings.skipDone && !opts.ignoreDone) {
-        const wantUp = settings.quality === 'upscaled' && kind === 'image';
+        const wantUp = wantsUpscale(kind, settings);
         const orig = done[doneKey(it.mediaId, false)];
         if (done[doneKey(it.mediaId, wantUp)] || (wantUp && orig && orig.upscaleFailed)) { out.skippedDone++; continue; }
       }
@@ -1332,14 +1344,16 @@
       log(`${opts.limit ? 'TEST RUN — ' : ''}Matched ${f.keep.length} item(s)${opts.limit ? `, processing ${keep.length}` : ''}. Skipped: ${skipSummary(f)}.`);
       ui.renderItems(keep);
       if (!keep.length) { ui.finish('Nothing to download: ' + skipSummaryShort(f) + '.'); return; }
-      const upMode = settings.quality === 'upscaled';
+      const upMode = anyUpscale(settings);
       let upAllowed = upMode;
       const limitPauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
       if (upMode) {
         const cur = currentProjectId();
-        if (!cur) log('Upscaled mode needs a project page open in this tab; pictures will be deferred.');
-        else if (keep.some((i) => i.kind === 'image' && i.projectId && i.projectId.toLowerCase() !== cur)) log('Upscaled mode can only drive the grid of the project open in this tab; pictures from other projects are deferred.');
-        log(`Upscaled mode: Flow will upscale each picture (preferring ${settings.imageUpscale}, else the best size your plan allows) one at a time (pause ${settings.upscalePauseSec}s between). Videos are saved at original quality.`);
+        if (!cur) log('Upscaled mode needs a project page open in this tab; items to upscale will be deferred.');
+        else if (keep.some((i) => wantsUpscale(i.kind, settings) && i.projectId && i.projectId.toLowerCase() !== cur)) log('Upscaled mode can only drive the grid of the project open in this tab; items from other projects are deferred.');
+        const what = [settings.quality === 'upscaled' && `pictures (preferring ${settings.imageUpscale})`, settings.videoQuality === 'upscaled' && `videos (preferring ${settings.videoUpscale})`].filter(Boolean).join(' and ');
+        const plain = [settings.quality !== 'upscaled' && settings.images && 'Pictures', settings.videoQuality !== 'upscaled' && settings.videos && 'Videos'].filter(Boolean).join(' and ');
+        log(`Upscaled mode: Flow will upscale ${what}, else the best size your plan allows, one at a time (pause ${settings.upscalePauseSec}s between).${plain ? ` ${plain} are saved at original quality.` : ''}`);
         const limitAt = store.get('fbd.upscaleLimitAt', 0);
         if (limitAt && Date.now() - limitAt < limitPauseMs) {
           log(`⏸ Flow's upscale limit was hit at ${fmtHuman(limitAt)}; upscaling is paused until ${fmtHuman(limitAt + limitPauseMs)} (${settings.onLimit === 'originals' ? 'saving originals meanwhile' : 'those pictures are deferred'}). Use "Reset limit pause" to override.`);
@@ -1359,18 +1373,18 @@
       for (let i = 0; i < keep.length; i++) {
         if (stopFlag) { log('Stopped.'); break; }
         const it = keep[i];
-        const needsUp = upMode && it.kind === 'image';
+        const needsUp = wantsUpscale(it.kind, settings);
         if (needsUp && gridMissing) { deferred++; continue; }
         if (needsUp && upAllowed && settings.dailyUpscaleCap > 0 && upscalesLast24h() >= settings.dailyUpscaleCap) {
           const oldest = Math.min(...loadUpscaleLog().filter((t) => Date.now() - t < 86400000));
           store.set('fbd.upscaleLimitAt', isFinite(oldest) ? oldest : Date.now());
           upAllowed = false;
           log(`⏸ Daily upscale cap of ${settings.dailyUpscaleCap} reached (counted locally); upscaling pauses until ${fmtHuman((isFinite(oldest) ? oldest : Date.now()) + limitPauseMs)}.`);
-          if (settings.onLimit !== 'originals') { deferred += keep.length - i; log('Remaining pictures are deferred to a later run.'); break; }
+          if (settings.onLimit !== 'originals') { deferred += keep.length - i; log('Remaining upscales are deferred to a later run.'); break; }
         }
         if (needsUp && !upAllowed && settings.onLimit !== 'originals') { deferred++; continue; }
         if (needsUp && upAllowed && settings.maxUpscalesPerRun > 0 && upscalesDone >= settings.maxUpscalesPerRun) {
-          if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining pictures are deferred to the next run.`);
+          if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining upscales are deferred to the next run.`);
           deferred++; continue;
         }
         ui.progress(i, keep.length, it, { ok, fail, deferred });
@@ -1386,7 +1400,7 @@
               if (r.upscaled) {
                 upscalesDone++; recordUpscale();
                 const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
-                if (pauseMs && i < keep.length - 1) activity('Waiting before the next picture so Flow is not rushed…', { untilMs: pauseMs });
+                if (pauseMs && i < keep.length - 1) activity('Waiting before the next one so Flow is not rushed…', { untilMs: pauseMs });
                 await pacedSleep(pauseMs);
               }
             } catch (e) {
@@ -1461,8 +1475,9 @@
     const done = loadDone();
     let n = 0;
     for (const it of f.keep) {
-      const k = doneKey(it.mediaId, settings.quality === 'upscaled' && it.kind === 'image');
-      if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: settings.quality === 'upscaled' && it.kind === 'image', upscaleFailed: false, manual: true }; n++; }
+      const up = wantsUpscale(it.kind, settings);
+      const k = doneKey(it.mediaId, up);
+      if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: up, upscaleFailed: false, manual: true }; n++; }
     }
     saveDone(done);
     log(`Marked ${n} item(s) as already downloaded. Future runs will only pick up newer items.`);
@@ -1621,7 +1636,7 @@
         .body { overflow:auto; padding:10px 12px 12px; flex:1; min-height:0; }
         .pane { display:none; } .pane.on { display:block; }
         .field { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin:0 0 8px; }
-        .lbl { color:var(--muted); min-width:48px; }
+        .lbl { color:var(--muted); min-width:56px; }
         label { display:inline-flex; align-items:center; gap:6px; }
         .grid label { margin:3px 12px 3px 0; }
         input[type=text], input[type=number], input[type=datetime-local], select, textarea { background:var(--field); color:var(--text); border:1px solid #5f6368; border-radius:6px; padding:5px 7px; }
@@ -1717,11 +1732,18 @@
               <label><input type="checkbox" id="videos"> Videos</label>
               <label title="Leave out files that are already in the download history"><input type="checkbox" id="skipDone"> Skip already saved</label>
             </div>
-            <div class="field">
-              <span class="lbl">Quality</span>
+            <div class="field" id="qPicRow">
+              <span class="lbl">Pictures</span>
               <div class="seg">
                 <label><input type="radio" name="quality" value="original" id="qOriginal"><span>Original</span></label>
                 <label><input type="radio" name="quality" value="upscaled" id="qUpscaled"><span id="qUpLabel">Upscaled</span></label>
+              </div>
+            </div>
+            <div class="field" id="qVidRow">
+              <span class="lbl">Videos</span>
+              <div class="seg">
+                <label><input type="radio" name="vquality" value="original" id="vqOriginal"><span>Original</span></label>
+                <label><input type="radio" name="vquality" value="upscaled" id="vqUpscaled"><span id="vqUpLabel">Upscaled</span></label>
               </div>
             </div>
             <div class="hint" id="qualityHint"></div>
@@ -1762,7 +1784,8 @@
             <details>
               <summary>Upscaling <span class="sum" id="sumUpscale"></span></summary>
               <div class="row">
-                <label>Size <input type="text" id="imageUpscale" list="fbd-res" size="5"><datalist id="fbd-res"><option value="2K"><option value="4K"><option value="1K"></datalist></label>
+                <label>Picture size <input type="text" id="imageUpscale" list="fbd-res" size="5"><datalist id="fbd-res"><option value="2K"><option value="4K"><option value="1K"></datalist></label>
+                <label>Video size <input type="text" id="videoUpscale" list="fbd-vres" size="5"><datalist id="fbd-vres"><option value="1080p"><option value="4K"></datalist></label>
                 <label>Pause between <input type="number" id="upscalePause" min="0" step="1"> s</label>
               </div>
               <div class="row">
@@ -1777,7 +1800,7 @@
                 <label><input type="checkbox" id="fallbackOriginal"> If Flow says the upscale failed, save the original instead</label>
               </div>
               <div class="row"><button class="btn sm" id="resetLimit" title="Forget that the daily limit was hit">Reset limit pause</button></div>
-              <div class="note">Upscaled mode drives Flow's own Download menu one picture at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Keep the project open and the tab visible. Pictures it cannot reach are deferred to the next run. Videos are always saved at original quality.</div>
+              <div class="note">Upscaled mode drives Flow's own Download menu one picture or video at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Keep the project open and the tab visible. Items it cannot reach are deferred to the next run. Video upscales take longer, so they get three times the upscale timeout.</div>
             </details>
 
             <details>
@@ -1923,7 +1946,7 @@
     const FIELDS = {
       sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone',
       keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeNotInGrid: 'includeNotInGrid',
-      imageUpscale: 'imageUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
+      imageUpscale: 'imageUpscale', videoUpscale: 'videoUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
       extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',
       sidecar: 'sidecar', manifestPerRun: 'manifestPerRun', allowPosterFallback: 'poster', delayMs: 'delay',
@@ -1942,7 +1965,9 @@
       settings.scope = $('scopeSelected').checked ? 'selected' : 'current';
       settings.selectedProjects = Array.from(root.querySelectorAll('.projects input:checked')).map((i) => i.value);
       settings.quality = $('qUpscaled').checked ? 'upscaled' : 'original';
+      settings.videoQuality = $('vqUpscaled').checked ? 'upscaled' : 'original';
       settings.imageUpscale = (settings.imageUpscale || '2K').trim() || '2K';
+      settings.videoUpscale = (settings.videoUpscale || '1080p').trim() || '1080p';
       settings.upscaleLabel = settings.upscaleLabel || 'Upscal';
       settings.rpcListing = (settings.rpcListing || 'Zzl0ze').trim();
       settings.rpcMedia = (settings.rpcMedia || 'as29s').trim();
@@ -1963,6 +1988,7 @@
       }
       ($('scope' + (settings.scope === 'selected' ? 'Selected' : 'Current'))).checked = true;
       ($('q' + (settings.quality === 'upscaled' ? 'Upscaled' : 'Original'))).checked = true;
+      ($('vq' + (settings.videoQuality === 'upscaled' ? 'Upscaled' : 'Original'))).checked = true;
       renderProjects(); renderLearned(); renderStatus();
     }
     let locked = false; // settings are locked while a run goes
@@ -1984,7 +2010,7 @@
     function renderStatus() {
       const wiz = getWiz();
       const cur = currentProjectId();
-      const up = settings.quality === 'upscaled';
+      const up = anyUpscale(settings);
       const doneN = Object.keys(loadDone()).length;
       const lastRun = store.get('fbd.lastRun', null);
       const chips = [
@@ -2004,10 +2030,15 @@
       renderSummaries();
     }
     function renderSummaries() {
-      const up = settings.quality === 'upscaled';
       $('qUpLabel').textContent = `Upscaled ${settings.imageUpscale || '2K'}`;
-      $('qualityHint').textContent = up
-        ? `Flow upscales each picture one at a time (about ${Math.round((store.get(AVG_UP_KEY, 0) || 12000) / 1000 + (settings.upscalePauseSec || 0))} s each). Keep this project open and the tab visible; the run pauses while the tab is hidden. Videos are saved at original quality.`
+      $('vqUpLabel').textContent = `Upscaled ${settings.videoUpscale || '1080p'}`;
+      $('qPicRow').hidden = !settings.images;
+      $('qVidRow').hidden = !settings.videos;
+      const secs = (key, dflt) => Math.round((store.get(key, 0) || dflt) / 1000 + (settings.upscalePauseSec || 0));
+      const upPics = settings.images && settings.quality === 'upscaled', upVids = settings.videos && settings.videoQuality === 'upscaled';
+      const each = [upPics && `about ${secs(AVG_UP_KEY, 12000)} s per picture`, upVids && `about ${secs(AVG_UP_VIDEO_KEY, 45000)} s per video`].filter(Boolean).join(', ');
+      $('qualityHint').textContent = upPics || upVids
+        ? `Flow upscales each ${upPics && upVids ? 'picture and video' : upPics ? 'picture' : 'video'} one at a time (${each}). Keep this project open and the tab visible; the run pauses while the tab is hidden.`
         : 'Saves the files Flow already stores, straight away.';
       const f = [];
       if (settings.includeUndated) f.push('undated included');
@@ -2017,7 +2048,7 @@
       if (settings.excludeUploads) f.push('no uploads');
       if (settings.includeNotInGrid) f.push('hidden pictures included');
       $('sumFilters').textContent = f.join(' · ') || 'none';
-      $('sumUpscale').textContent = `${settings.imageUpscale || '2K'}, ${settings.upscalePauseSec || 0} s apart` +
+      $('sumUpscale').textContent = `${settings.imageUpscale || '2K'} pictures, ${settings.videoUpscale || '1080p'} videos, ${settings.upscalePauseSec || 0} s apart` +
         (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day` : '');
       $('sumProjects').textContent = settings.scope === 'selected' ? `${(settings.selectedProjects || []).length} selected` : 'this project only';
       $('sumSaving').textContent = settings.downloadMode === 'tampermonkey' ? `Downloads/${settings.subfolder || ''}${settings.folderByProject ? '/project' : ''}${settings.folderByMonth ? '/month' : ''}` : 'Downloads folder, no subfolders';
@@ -2090,7 +2121,7 @@
     function progress(i, n, item, counts) {
       setBar(n ? i / n : 0);
       if (i === 0 || !runStartAt) runStartAt = Date.now();
-      const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0));
+      const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0));
       prog = item ? { i, n, item, perMs, at: Date.now(), counts } : null;
       renderProgress();
     }
@@ -2194,7 +2225,7 @@
       try { navigator.clipboard.writeText(logEl.textContent).then(() => done('Copied'), () => done('Copy failed')); } catch (e) { done('Copy failed'); }
     });
     $('refreshProjects').addEventListener('click', () => { readForm(); renderProjects(); log('Project list refreshed from this page.'); });
-    for (const id of Object.values(FIELDS).concat(['scopeCurrent', 'scopeSelected', 'qOriginal', 'qUpscaled'])) $(id).addEventListener('change', readForm);
+    for (const id of Object.values(FIELDS).concat(['scopeCurrent', 'scopeSelected', 'qOriginal', 'qUpscaled', 'vqOriginal', 'vqUpscaled'])) $(id).addEventListener('change', readForm);
     $('projects').addEventListener('change', readForm);
 
     $('scan').addEventListener('click', async () => {
@@ -2204,7 +2235,7 @@
         const s = await scan(settings, log);
         const f = filterItems(s.items, settings);
         log(`Would download ${f.keep.length} item(s). Skipped: ${skipSummary(f)}.`);
-        const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0)))} at the current pacing)` : '';
+        const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0)))} at the current pacing)` : '';
         setBar(null);
         finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}${est}.\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
         renderItems(f.keep);
@@ -2290,7 +2321,7 @@
       if (!(settings.runOnLoadHours > 0) || onLabs) return;
       const last = store.get('fbd.lastRun', 0) || 0;
       if (Date.now() - last < settings.runOnLoadHours * 3600000) return;
-      const needProject = settings.quality === 'upscaled' && !currentProjectId();
+      const needProject = anyUpscale(settings) && !currentProjectId();
       if (needProject) {
         const target = settings.autoProjectId || (settings.selectedProjects || [])[0];
         const lastNav = store.get('fbd.autoNavAt', 0) || 0;

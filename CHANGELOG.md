@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.8 — 2026-10-23
+
+- **Videos can be upscaled too.** The Download tab has a quality switch for each type: **Pictures** (Original | Upscaled 2K) and **Videos** (Original | Upscaled 1080p), so they can be mixed. Upscaled videos go through Flow's own video menu (270p GIF / 720p Original / 1080p Upscaled / 4K Upscaled) and are saved as `… [1080p Upscaled].mp4`. **Video size** sits next to **Picture size** under Options → Upscaling.
+- Video upscales get three times the upscale timeout and their own time estimate.
+- Each quality row only shows when that type is ticked.
+
 ## 0.3.7 — 2026-10-23
 
 - **Settings lock while a run is going.** Every option, the project list and the buttons that change state (Clear history, Import backup, Reset limit pause, Learn) are disabled until the run ends, with a note saying why. The run uses what was set when it started; before, a button such as Export backup saved the form and could change a run partway through.

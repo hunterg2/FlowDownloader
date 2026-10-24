@@ -1,7 +1,7 @@
 # Flow Bulk Downloader
 
 **Download all your Google Flow pictures and videos at once, at original quality or upscaled
-to 2K, instead of saving them one by one.**
+(2K pictures, 1080p videos), instead of saving them one by one.**
 
 Flow Bulk Downloader is a small add-on for your browser (a Tampermonkey userscript). It adds a
 **⬇ Flow Export** button to [Google Flow](https://flow.google.com). Pick a date range, press
@@ -10,14 +10,14 @@ the date it was created so the files sort in order. It remembers what it already
 time it only fetches what's new.
 
 - **Original quality:** fast. Saves the files Flow already stores.
-- **Upscaled 2K:** slower. Has Flow upscale each picture to 2K, one at a time, the same way
-  you would by hand.
+- **Upscaled:** slower. Has Flow upscale each picture to 2K and each video to 1080p, one at a
+  time, the same way you would by hand. Pictures and videos each have their own setting.
 - Runs entirely inside your own signed-in Flow tab. Nothing is sent anywhere else: it only
   talks to Flow, using your existing session, the same way the Flow website does.
 
 **Contents:** [Install](#install) · [Update](#update) ·
 [Download at original quality](#download-at-original-quality) ·
-[Download at 2K](#download-upscaled-to-2k) · [The panel](#the-panel) · [FAQ](#faq) ·
+[Download upscaled](#download-upscaled-2k-pictures-1080p-videos) · [The panel](#the-panel) · [FAQ](#faq) ·
 [Tips for new users](#tips-for-new-users) · [If something breaks](#if-something-breaks) ·
 [Reference](#reference)
 
@@ -86,7 +86,7 @@ This is the quick way. It saves the files exactly as Flow stores them, usually a
 2. On the **Download** tab, set **From** to the date and time to start from. Leave **To** empty
    to go up to now.
 3. Tick **Pictures**, **Videos** or both. Leave **Skip already saved** ticked.
-4. Set **Quality** to **Original**.
+4. Set the **Pictures** and **Videos** quality switches to **Original**.
 5. Click **Scan**. Nothing is downloaded: it shows how many items match and roughly how long
    they would take, and lists them under **Matching items**. The Download button now shows the
    count, for example **Download 42**.
@@ -104,45 +104,52 @@ date to find them.
 one go. Visit the Flow home page once so the script sees your projects, then go to
 **Options → Projects**, choose **Selected projects** and tick the ones you want.
 
-## Download upscaled to 2K
+## Download upscaled (2K pictures, 1080p videos)
 
-Flow's 2K upscale isn't a stored file. Flow makes it on request, behind a security check that
-only Flow's own page can pass. So in this mode the script works Flow's page for you, the same way
-you would by hand: it scrolls to each picture, opens its menu, picks **Download → 2K Upscaled**,
-waits for Flow to finish, then moves on. That makes it slower: about **20 seconds per picture**.
+Flow's upscaled downloads aren't stored files. Flow makes them on request, behind a security
+check that only Flow's own page can pass. So in this mode the script works Flow's page for you,
+the same way you would by hand: it scrolls to each picture or video, opens its menu, picks
+**Download → 2K Upscaled** (pictures) or **1080p Upscaled** (videos), waits for Flow to finish,
+then moves on. That makes it slower: about **20 seconds per picture**, and longer per video.
+
+Pictures and videos each have their own quality switch on the **Download** tab, so you can mix
+them: for example 2K pictures with original videos, or original pictures with 1080p videos.
 
 1. Open the **project** in Flow. Upscaled mode works on the project open in the tab.
-2. Click **⬇ Flow Export**, set **From** (and **To** if you like), and tick **Pictures**.
-3. Set **Quality** to **Upscaled 2K**. The hint underneath shows the time per picture.
-4. Click **Scan** to see how many pictures match and how long the run will take.
-5. Click **Test 1** to check that a single 2K picture works.
+2. Click **⬇ Flow Export**, set **From** (and **To** if you like), and tick **Pictures**,
+   **Videos** or both.
+3. Set the **Pictures** switch to **Upscaled 2K** and/or the **Videos** switch to
+   **Upscaled 1080p**. The hint underneath shows the time per item.
+4. Click **Scan** to see what will be upscaled and how long the run will take.
+5. Click **Test 1** to check that a single upscaled file works.
 6. Click **Download**, then **leave the Flow tab alone and visible** until it's done (the
    [FAQ](#faq) covers what you can and can't do meanwhile).
 
 Good to know:
 
-- **Videos** are always saved at original quality; only pictures are upscaled.
-- 2K files get a `[2K Upscaled]` tag in their name. If Flow saves a file under its own name
-  instead, the script still records it as done.
+- Upscaled files get a tag in their name, such as `[2K Upscaled]` or `[1080p Upscaled]`. If
+  Flow saves a file under its own name instead, the script still records it as done.
 - **Flow limits how many upscales you can do per day.** When Flow says the limit is reached,
   the run stops (or carries on with originals, if you choose that under **Options →
   Upscaling → On the daily limit**) and upscaling pauses for 24 hours. The top strip shows how
   many upscales you've done in the last 24 hours. If you know your limit, enter it as the
   **Daily cap** and the script stops just before it.
-- If Flow's upscale fails for a picture, the original is saved instead, so you still get
-  the picture.
-- A picture it couldn't reach (for example because the page was busy) is **deferred**:
+- If Flow's upscale fails, the original is saved instead, so you still get the picture or
+  video.
+- An item it couldn't reach (for example because the page was busy) is **deferred**:
   nothing is saved, it isn't marked as done, and the next run tries it again.
-- **Original and 2K are tracked separately.** If you already saved a picture at original
-  quality, a 2K run still downloads it again at 2K.
-- 4K is a paid Flow option. When it's locked, the best available size is used.
+- **Original and upscaled are tracked separately.** If you already saved something at original
+  quality, an upscaled run still downloads it again, upscaled.
+- 4K (for pictures and videos) is a paid Flow option. When it's locked, the best available size
+  is used.
 
 ## The panel
 
 - **Top strip:** whether you're signed in, which project is open, how many files are in the
   download history and, in Upscaled mode, upscales used in the last 24 hours. A yellow line
   appears if upscaling is paused because Flow's daily limit was hit.
-- **Download tab:** what you change each run: dates, pictures/videos, quality, the buttons, and
+- **Download tab:** what you change each run: dates, pictures/videos, a quality switch for
+  each (Original or Upscaled), the buttons, and
   a **progress card** with the count ("3 / 11"), a bar, the current step, the time left and how
   many were saved, failed or deferred.
 - **Options tab:** filters, upscaling, projects, saving and automation. Each section's heading
@@ -173,7 +180,7 @@ from the files. It only downloads something again if:
 - you press **Tools → Clear history**;
 - the history is lost: the script or Tampermonkey is reinstalled, or you use another browser or
   Chrome profile (each has its own history);
-- you switch from Original to 2K (each quality is tracked separately).
+- you switch from Original to Upscaled (each quality is tracked separately).
 
 **I lost my history (new PC, reinstall). How do I avoid downloading everything again?**
 Before a reinstall or a move, use **Tools → Export backup**, and **Import backup…** afterwards.
@@ -185,7 +192,7 @@ downloading anything, so future runs only fetch newer items.
 It depends on the quality:
 - **Original:** yes. It fetches the files directly and doesn't touch the page, so you can
   scroll, open other projects, or use other tabs and windows.
-- **Upscaled 2K:** keep your hands off the Flow page. The script is scrolling and clicking
+- **Upscaled:** keep your hands off the Flow page. The script is scrolling and clicking
   the page itself. A click of yours can close the menu it just opened, and opening another
   project takes away the picture it was looking for. Nothing breaks if you do: that picture is
   just deferred to the next run. Using the panel or the small card (expand, shrink, Stop,
@@ -193,7 +200,7 @@ It depends on the quality:
 
 **Can I minimize the window or switch to another tab?**
 - **Original:** yes. It keeps going in the background (Chrome may slow it down a little).
-- **Upscaled 2K:** it **pauses** ("⏸ Paused: the Flow tab is hidden") and carries on when you
+- **Upscaled:** it **pauses** ("⏸ Paused: the Flow tab is hidden") and carries on when you
   come back. Flow only draws its pictures while the tab is visible, so the script can't work the
   page while it's hidden. Working in **another window** is fine as long as the Flow window stays
   visible, for example on a second monitor or side by side.
@@ -239,11 +246,12 @@ one readable file in this repo.
   it will take, and catches a wrong date before you've saved 500 files.
 - **Then Test 1.** One file is the quickest way to check the name, folder and quality are what
   you want.
-- **Start small with 2K.** Try a day or two first. Upscaling is slow (about 20 s per picture)
+- **Start small with upscaling.** Try a day or two first. Upscaling is slow (about 20 s per
+  picture, longer per video)
   and limited per day, so a big run can take hours and hit the limit partway. It simply picks
   up the rest next time.
-- **Do originals first, 2K later.** Save everything at original quality quickly, then run 2K
-  over the pictures you actually want bigger, using a narrow date range or the
+- **Do originals first, upscaled later.** Save everything at original quality quickly, then run
+  an upscaled pass over the pictures and videos you actually want bigger, using a narrow date range or the
   **Prompt contains** filter (Options → Filters).
 - **Keep the computer awake** during long runs. If it goes to sleep, the run stalls; anything
   that failed is tried again on the next run.
@@ -254,8 +262,8 @@ one readable file in this repo.
   resetting the browser or moving to another PC.
 - **Watch the progress card, not the log.** The card says what's happening and how long is left;
   the log opens by itself if something needs your attention.
-- **One project at a time for 2K.** Upscaled mode works on the project open in the tab;
-  pictures from other projects are deferred until you open them.
+- **One project at a time for upscaling.** Upscaled mode works on the project open in the tab;
+  items from other projects are deferred until you open them.
 - **Let it run on its own:** **Options → Automation** can check for new items every few
   minutes while the tab is open, or start a run whenever Flow opens. See
   [Automation](#automation).
@@ -293,7 +301,7 @@ Under **Options → Saving & folders**:
 - The default **Save with → Browser download** saves every file straight into your browser's
   Downloads folder, with no subfolders.
 - **Save with → Tampermonkey** saves into `Downloads/<Base folder>/<Project>/<YYYY-MM>/…` when
-  **Folder per project** / **Folder per month** are ticked. It also gives 2K runs a reliable
+  **Folder per project** / **Folder per month** are ticked. It also gives upscaled runs a reliable
   "saved to disk" signal. Tampermonkey may ask you once to allow file extensions (Dashboard →
   Settings → Downloads BETA: add `jpg png webp mp4 txt json csv`). If this mode fails for a
   file, the script falls back to a plain browser download so nothing is lost.
@@ -320,7 +328,9 @@ save those too. **Include items with no date** adds items whose creation time ca
 
 Under **Options → Upscaling**:
 
-- **Size:** 2K (default), or 4K if your Flow plan allows it.
+- **Picture size:** 2K (default), or 4K if your Flow plan allows it. **Video size:** 1080p
+  (default), or 4K if your plan allows it.
+- Video upscales take longer, so they get three times the **Upscale timeout** (Tools → Advanced).
 - **Pause between** upscales (default 8 s) and **Max per run** keep each run modest.
 - **Daily cap:** stops before Flow's daily limit, using the script's own count of the last
   24 hours.
