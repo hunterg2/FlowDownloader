@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.7 — 2026-10-23
+
+- **Settings lock while a run is going.** Every option, the project list and the buttons that change state (Clear history, Import backup, Reset limit pause, Learn) are disabled until the run ends, with a note saying why. The run uses what was set when it started; before, a button such as Export backup saved the form and could change a run partway through.
+- **README rewritten as a how-to guide:** installing Tampermonkey, updating, downloading at original quality and at 2K, the panel, an FAQ (what counts as already downloaded, using Flow or other tabs during a run, minimizing) and tips for new users.
+
 ## 0.3.6 — 2026-10-23
 
 - **Cleaner, tabbed panel.** A status strip at the top (signed in, project, history count, upscales in the last 24 h), then three tabs: **Download** (dates, type, quality, buttons, progress card), **Options** (filters, upscaling, projects, saving, automation, each heading showing its current settings) and **Tools** (history, exports, backup, Diagnose, Learn, Advanced).

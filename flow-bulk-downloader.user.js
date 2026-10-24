@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.6
+// @version      0.3.7
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.6';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.7';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -1644,6 +1644,8 @@
         .actions .btn.danger { flex:1; font-weight:600; }
         .btn.sm { padding:3px 8px; font-size:12px; }
         .btn:disabled { opacity:.5; cursor:not-allowed; }
+        input:disabled, select:disabled, textarea:disabled, .seg input:disabled + span { opacity:.55; cursor:not-allowed; }
+        label:has(> input:disabled) { color:var(--muted); }
         .btns { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
         .card { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:10px; margin:0 0 8px; }
         .cardTop { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
@@ -1701,6 +1703,7 @@
           <button class="tab" data-tab="tools">Tools</button>
         </div>
         <div class="body">
+          <div class="alert" id="lockNote" hidden>🔒 Settings are locked while a run is going; the run uses what was set when it started. Press Stop to change them.</div>
           <section class="pane on" data-pane="main">
             <div class="field">
               <span class="lbl">From</span><input type="datetime-local" id="since">
@@ -1962,13 +1965,14 @@
       ($('q' + (settings.quality === 'upscaled' ? 'Upscaled' : 'Original'))).checked = true;
       renderProjects(); renderLearned(); renderStatus();
     }
+    let locked = false; // settings are locked while a run goes
     function renderProjects() {
       const projects = discoverProjectsFromDom();
       const el = $('projects');
       const list = Object.values(projects).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
       if (!list.length) { setHTML(el, '<span class="muted">No projects discovered yet. Visit the Flow home page, then click "Refresh list".</span>'); return; }
       const sel = new Set((settings.selectedProjects || []).map((s) => s.toLowerCase()));
-      setHTML(el, list.map((p) => `<label><input type="checkbox" value="${p.id}" ${sel.has(p.id) ? 'checked' : ''}> <span>${escapeHtml(p.title || '(untitled)')} <span class="muted">${p.id.slice(0, 8)}</span></span></label>`).join(''));
+      setHTML(el, list.map((p) => `<label><input type="checkbox" value="${p.id}" ${sel.has(p.id) ? 'checked' : ''}${locked ? ' disabled' : ''}> <span>${escapeHtml(p.title || '(untitled)')} <span class="muted">${p.id.slice(0, 8)}</span></span></label>`).join(''));
     }
     let creditsText = '';
     function chip(text, kind) {
@@ -2153,6 +2157,12 @@
     /** compact: shrink to the run card while this run goes (downloads, not scans). */
     function setRunning(on, compact) {
       for (const id of ['scan', 'download', 'test1', 'markDone']) $(id).disabled = on;
+      // Lock the settings too: the run uses what was set when it started, and buttons such as
+      // Backup save the form, so a change made mid-run could apply partway through.
+      locked = on;
+      for (const el of root.querySelectorAll('.pane input, .pane select, .pane textarea')) el.disabled = on;
+      for (const id of ['refreshProjects', 'resetLimit', 'refreshLearned', 'applyLearned', 'restore', 'clear']) $(id).disabled = on;
+      $('lockNote').hidden = !on;
       $('stop').disabled = $('mStop').disabled = !on;
       $('stop').hidden = !on; $('download').hidden = on;
       if (on) { prog = { text: 'Starting…' }; setBar(0); renderProgress(); }
