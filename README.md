@@ -97,6 +97,10 @@ Under **Saving & folders**:
 contains** (e.g. `NARWHAL`, `GEM_PIX`, `veo`, `abra`), and **Exclude my uploaded reference
 images** (experimental: skips items that have no generation record).
 
+Only pictures shown in the project grid are downloaded by default. Flow's listing also
+contains the reference images used in prompts; tick **Include pictures not shown in the
+project grid** to save those too.
+
 ## Automation
 
 - **Auto-check every N min** re-scans while the tab stays open.

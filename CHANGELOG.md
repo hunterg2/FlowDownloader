@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-10-23
+
+- **Fix: every picture was listed twice on the live site.** Flow's generation records carry the media id in their first field, not the third as older open-source notes said, so grid entries and records never merged. The parser now works out the layout from the data itself (verified against a real project) and both layouts are covered by tests.
+- Pictures that only appear as generation records and not in the project grid (in practice, reference images used in prompts) are skipped by default; tick *Include pictures not shown in the project grid* to get them. The scan log shows how many there are.
+
 ## 0.3.1 — 2026-10-23
 
 - **Fix: the ⬇ Flow Export button never appeared on flow.google.com.** Flow enforces Trusted Types, which blocks building the panel from an HTML string. Panel markup now goes through a Trusted Types policy, with a node-by-node fallback builder if a policy cannot be created.

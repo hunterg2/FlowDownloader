@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.1
+// @version      0.3.2
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -233,7 +233,10 @@
       urls: splitUrls(collectUrls(n)),
     };
   }
-  /** Shape B ("generation record"): [workflowId, projectId, mediaId, ?, ?, details[], ?, (videoArm)] */
+  /** Shape B ("generation record"): [id0, projectId, id2, ?, ?, details[], ?, (videoArm)].
+   *  Live flow.google.com (2026-10) puts the downloadable media id at id0 (it equals the asset
+   *  entry's d[4] and is what as29s accepts) and the asset id at id2. Older open-source notes had
+   *  them the other way round, so extractItems() decides per listing which one links to entries. */
   function readRecord(n) {
     if (!Array.isArray(n) || n.length < 6 || n.length > 10) return null;
     if (!isUuid(n[0]) || !isUuid(n[1]) || !isUuid(n[2])) return null;
@@ -244,8 +247,8 @@
     const status = details[8] && Array.isArray(details[8]) ? details[8][0] : null;
     const size = typeof details[13] === 'number' ? details[13] : null;
     return {
-      mediaId: n[2],
-      workflowId: n[0],
+      mediaId: n[0],
+      altId: n[2],
       projectId: n[1],
       title: '',
       createdMs: guessCreatedMs(details),
@@ -281,17 +284,35 @@
       }
       byId.set(it.mediaId, cur);
     };
+    const entries = [], records = [];
     const walk = (n, depth) => {
       if (!Array.isArray(n) || depth > 40) return;
       stats.arrays++;
       const a = readAssetEntry(n);
-      if (a) { stats.assetEntries++; a.createdSource = a.createdMs != null ? 'entry' : null; merge(a); }
+      if (a) { stats.assetEntries++; a.createdSource = a.createdMs != null ? 'entry' : null; a.inGrid = true; entries.push(a); }
       const r = readRecord(n);
-      if (r) { stats.records++; r.createdSource = r.createdMs != null ? 'guess' : null; merge(r); }
+      if (r) { stats.records++; r.createdSource = r.createdMs != null ? 'guess' : null; records.push(r); }
       for (const c of n) walk(c, depth + 1);
     };
     walk(payload, 0);
+    // Which record id links to the entries' media ids? Use whichever matches more often.
+    const entryMedia = new Set(entries.map((e) => e.mediaId));
+    let at0 = 0, at2 = 0;
+    for (const r of records) { if (entryMedia.has(r.mediaId)) at0++; if (entryMedia.has(r.altId)) at2++; }
+    stats.recordIdSlot = at2 > at0 ? 2 : 0;
+    for (const r of records) {
+      if (stats.recordIdSlot === 2) { const t = r.mediaId; r.mediaId = r.altId; r.altId = t; }
+      delete r.altId;
+    }
+    for (const e of entries) merge(e);
+    for (const r of records) merge(r);
     const items = Array.from(byId.values());
+    // With no grid entries at all (unknown listing shape), treat every item as visible.
+    stats.notInGrid = 0;
+    for (const it of items) {
+      if (!entries.length) it.inGrid = true;
+      else if (!it.inGrid) { it.inGrid = false; stats.notInGrid++; }
+    }
     for (const it of items) {
       if (!it.kind) it.kind = kindFromUrls(it.urls.content) || 'unknown';
       if (!it.title) it.title = '';
@@ -453,7 +474,7 @@
   const DEFAULT_SETTINGS = {
     // what
     sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true,
-    keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false,
+    keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeNotInGrid: false,
     // quality
     quality: 'original', imageUpscale: '2K', upscaleLabel: 'Upscal', fallbackOriginal: true, upscaleTimeoutSec: 120,
     upscalePauseSec: 8, maxUpscalesPerRun: 0, dailyUpscaleCap: 0, onLimit: 'stop', limitPauseHours: 24,
@@ -1082,11 +1103,12 @@
     const done = loadDone();
     const inc = compileTerms(settings.keywordInclude), exc = compileTerms(settings.keywordExclude);
     const modelRe = settings.modelFilter ? new RegExp(escapeRe(settings.modelFilter), 'i') : null;
-    const out = { keep: [], skippedDone: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0 };
+    const out = { keep: [], skippedDone: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0, skippedNotInGrid: 0 };
     for (const it of items) {
       const kind = it.kind || 'unknown';
       const wantKind = (kind === 'image' && settings.images) || (kind === 'video' && settings.videos) || (kind === 'unknown' && (settings.images || settings.videos));
       if (!wantKind) { out.skippedType++; continue; }
+      if (!settings.includeNotInGrid && it.inGrid === false) { out.skippedNotInGrid++; continue; }
       if (settings.excludeUploads && !it.hasRecord) { out.skippedUpload++; continue; }
       if (!matchesKeywords(it.title, inc, exc)) { out.skippedKeyword++; continue; }
       if (modelRe && !modelRe.test(it.model || '')) { out.skippedModel++; continue; }
@@ -1111,6 +1133,7 @@
     if (f.skippedKeyword) parts.push(`${f.skippedKeyword} keyword`);
     if (f.skippedModel) parts.push(`${f.skippedModel} model`);
     if (f.skippedUpload) parts.push(`${f.skippedUpload} uploads`);
+    if (f.skippedNotInGrid) parts.push(`${f.skippedNotInGrid} not shown in the project grid`);
     return parts.join(', ');
   }
 
@@ -1124,7 +1147,7 @@
       const r = await listProjectMedia(pid, settings, log);
       const dates = r.items.map((i) => i.createdMs).filter((x) => x != null);
       const range = dates.length ? `${fmtHuman(Math.min(...dates))} → ${fmtHuman(Math.max(...dates))}` : 'no dates found';
-      log(`  ${r.items.length} items via ${r.source || 'n/a'} (${r.items.filter((i) => i.kind === 'image').length} images, ${r.items.filter((i) => i.kind === 'video').length} videos); dates ${range}`);
+      log(`  ${r.items.length} items via ${r.source || 'n/a'} (${r.items.filter((i) => i.kind === 'image').length} images, ${r.items.filter((i) => i.kind === 'video').length} videos${r.stats && r.stats.notInGrid ? `, ${r.stats.notInGrid} not in the grid` : ''}); dates ${range}`);
       perProject.push({ projectId: pid, count: r.items.length, source: r.source, stats: r.stats, rawSample: r.raw });
       all.push(...r.items);
       await sleep(settings.delayMs);
@@ -1314,7 +1337,7 @@
       out.lastScan = {
         at: new Date(lastScan.at).toISOString(),
         perProject: lastScan.perProject.map((p) => ({ projectId: p.projectId, count: p.count, source: p.source, stats: p.stats, rawSample: redactSample(p.rawSample) })),
-        itemsSample: lastScan.items.slice(0, 25).map((i) => ({ mediaId: i.mediaId, kind: i.kind, title: i.title, createdMs: i.createdMs, createdSource: i.createdSource, sizeBytes: i.sizeBytes, status: i.status, model: i.model, hasRecord: i.hasRecord, urlKinds: { content: i.urls.content.map((u) => u.split('?')[0].replace(/\/[^/]+$/, '/<id>')), poster: i.urls.poster.length } })),
+        itemsSample: lastScan.items.slice(0, 25).map((i) => ({ mediaId: i.mediaId, kind: i.kind, title: i.title, createdMs: i.createdMs, createdSource: i.createdSource, sizeBytes: i.sizeBytes, status: i.status, model: i.model, hasRecord: i.hasRecord, inGrid: i.inGrid, urlKinds: { content: i.urls.content.map((u) => u.split('?')[0].replace(/\/[^/]+$/, '/<id>')), poster: i.urls.poster.length } })),
       };
     }
     return out;
@@ -1469,6 +1492,7 @@
           <div class="row">
             <label>Model contains <input type="text" id="modelFilter" placeholder="e.g. NARWHAL"></label>
             <label><input type="checkbox" id="excludeUploads"> Exclude my uploaded reference images (experimental)</label>
+            <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts)</label>
           </div>
         </details>
 
@@ -1614,7 +1638,7 @@
 
     const FIELDS = {
       sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone',
-      keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads',
+      keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeNotInGrid: 'includeNotInGrid',
       imageUpscale: 'imageUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
       extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',

@@ -95,7 +95,7 @@ test('readAssetEntry reads title, time, kind and media id', () => {
 
 test('readRecord reads kind, size, status, model and signed URLs', () => {
   const v = H.readRecord(recordVideo);
-  assert.equal(v.mediaId, U(11));
+  assert.deepEqual([v.mediaId, v.altId], [U(21), U(11)], 'raw slots: id0 first, id2 as alternative');
   assert.equal(v.kind, 'video');
   assert.equal(v.sizeBytes, 2410295);
   assert.equal(v.status, 3);
@@ -127,6 +127,37 @@ test('extractItems merges entries and records by media id and flags uploads', ()
   const undated = items.find((i) => i.mediaId === U(12));
   assert.equal(undated.createdSource, 'guess');
   assert.equal(undated.createdMs, 1760000000 * 1000);
+  assert.equal(stats.recordIdSlot, 2, 'older layout: records link through id2');
+  assert.equal(undated.inGrid, false, 'a record with no grid entry is flagged');
+  assert.equal(img.inGrid, true);
+});
+
+// Layout seen on live flow.google.com (2026-10-23): entries carry no image/video flag, the
+// record's FIRST id is the media id (= entry d[4], accepted by as29s) and its third id equals
+// the entry's own id. Extra records without an entry are reference images, not grid results.
+test('extractItems handles the live 2026-10 layout without duplicating items', () => {
+  const SEC = 1787767332; // 2026-08-26
+  const entry = (asset, media, op, title) => [asset, null, null, [title, [SEC, 181952000], null, null, media, op, [SEC + 20, 0]], U(7)];
+  const rec = (media, asset, dims) => [media, U(7), asset, null, null,
+    [[SEC, 0], null, null, null, null, 'https://lh3.googleusercontent.com/asb/T' + media.slice(0, 4), [null, null, [['x', null, [[1]]]], [], 1], null, null, 1, 'https://lh3.googleusercontent.com/asb/T', null, null, 974606],
+    [[null, 904663, null, null, null, null, null, 'x', 29, '', null, asset, null, 'https://lh3.googleusercontent.com/asb/T', 3], null, dims, null, null, ['https://lh3.googleusercontent.com/asb/T']]];
+  const payload = [null,
+    [entry(U(101), U(201), U(301), 'A cozy kitchen'), entry(U(102), U(202), U(302), 'A harbor')],
+    [rec(U(201), U(101), [1376, 768]), rec(U(202), U(102), [1376, 768]), rec(U(203), U(101), [896, 1200])],
+    [[U(400), 1, 'library item', [U(401), 'x'.repeat(40), U(402), null, null, [[1757385964, 0]]]]],
+    null, null, null, [null, null, [[null, 3, 2, null, 'x']]]];
+  const { items, stats } = H.extractItems(payload);
+  assert.equal(stats.recordIdSlot, 0);
+  assert.equal(items.length, 3, 'two grid pictures + one reference image, no duplicates');
+  const a = items.find((i) => i.mediaId === U(201));
+  assert.equal(a.title, 'A cozy kitchen');
+  assert.equal(a.kind, 'image', 'kind comes from the record when the entry has no flag');
+  assert.equal(a.createdMs, SEC * 1000 + 181);
+  assert.equal(a.inGrid, true);
+  assert.equal(a.hasRecord, true);
+  const ref = items.find((i) => i.mediaId === U(203));
+  assert.equal(ref.inGrid, false);
+  assert.equal(stats.notInGrid, 1);
 });
 
 test('guessCreatedMs prefers [sec,nanos] pairs and ignores pre-2025 noise and byte sizes', () => {
