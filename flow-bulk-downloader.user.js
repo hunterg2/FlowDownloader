@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.2
+// @version      0.3.3
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -876,14 +876,20 @@
     return null;
   }
   function optionsRe(settings) { try { return new RegExp(settings.optionsLabel || DEFAULT_SETTINGS.optionsLabel, 'i'); } catch (e) { return new RegExp(DEFAULT_SETTINGS.optionsLabel, 'i'); } }
+  // Flow (2026-10) hides each tile's hotbar with CSS :hover, which synthetic mouse events cannot
+  // trigger. Its "More options" button still opens the menu when clicked while hidden, so a
+  // labelled menu trigger is used whether or not it is visible; unlabelled guesses must be visible.
   function optionsButtonIn(tile, settings) {
     const re = optionsRe(settings);
-    for (const root of [tile, tile.parentElement].filter(Boolean)) {
-      const btns = Array.from(root.querySelectorAll('button, [role="button"]')).filter(isVisible);
-      const pref = btns.find((b) => re.test((b.getAttribute('aria-label') || '') + ' ' + (b.title || ''))) ||
-                   btns.find((b) => /^(menu|true)$/.test(b.getAttribute('aria-haspopup') || ''));
+    const label = (b) => (b.getAttribute('aria-label') || '') + ' ' + (b.title || '');
+    const isTrigger = (b) => /^(menu|true)$/.test(b.getAttribute('aria-haspopup') || '');
+    const roots = uniq([tile, tile.parentElement, tile.closest('flow-grid-tile-container, [role="group"]')].filter(Boolean));
+    for (const root of roots) {
+      const all = Array.from(root.querySelectorAll('button, [role="button"]'));
+      const pref = all.find((b) => isTrigger(b) && re.test(label(b))) || all.find((b) => re.test(label(b))) || all.find(isTrigger);
       if (pref) return pref;
-      if (btns.length) return btns[btns.length - 1];
+      const vis = all.filter(isVisible);
+      if (vis.length) return vis[vis.length - 1];
     }
     return null;
   }
@@ -898,7 +904,8 @@
   function pickResolutionItem(items, settings) {
     const wantRes = String(settings.imageUpscale || '2K');
     const labelRe = new RegExp(escapeRe(settings.upscaleLabel || 'upscal'), 'i');
-    const notGif = items.filter((el) => !/gif/i.test(textOf(el)));
+    const isDisabled = (el) => !!el.disabled || el.getAttribute('aria-disabled') === 'true';
+    const notGif = items.filter((el) => !/gif/i.test(textOf(el)) && !isDisabled(el)); // e.g. 4K locked behind "Upgrade"
     const up = notGif.filter((el) => labelRe.test(textOf(el)));
     const resRe = new RegExp(wantRes.replace(/\s+/g, '').replace(/(\d)([kp])$/i, '$1\\s*$2'), 'i');
     return up.find((el) => resRe.test(textOf(el))) || up.slice().sort((a, b) => resRank(textOf(b)) - resRank(textOf(a)))[0] || null;
@@ -1185,7 +1192,7 @@
         const cur = currentProjectId();
         if (!cur) log('Upscaled mode needs a project page open in this tab; pictures will be deferred.');
         else if (keep.some((i) => i.kind === 'image' && i.projectId && i.projectId.toLowerCase() !== cur)) log('Upscaled mode can only drive the grid of the project open in this tab; pictures from other projects are deferred.');
-        log(`Upscaled mode: Flow will upscale each picture to ${settings.imageUpscale} one at a time (pause ${settings.upscalePauseSec}s between). Videos are saved at original quality.`);
+        log(`Upscaled mode: Flow will upscale each picture (preferring ${settings.imageUpscale}, else the best size your plan allows) one at a time (pause ${settings.upscalePauseSec}s between). Videos are saved at original quality.`);
         const limitAt = store.get('fbd.upscaleLimitAt', 0);
         if (limitAt && Date.now() - limitAt < limitPauseMs) {
           log(`⏸ Flow's upscale limit was hit at ${fmtHuman(limitAt)}; upscaling is paused until ${fmtHuman(limitAt + limitPauseMs)} (${settings.onLimit === 'originals' ? 'saving originals meanwhile' : 'those pictures are deferred'}). Use "Reset limit pause" to override.`);

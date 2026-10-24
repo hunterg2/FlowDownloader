@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3 — 2026-10-23
+
+- **Fix: Upscaled mode deferred every picture on the live site.** Flow reveals each tile's hover toolbar with CSS `:hover`, which scripted mouse events cannot trigger, so the script never saw a visible "More options" button. It now clicks the labelled menu button even while hidden; Flow opens the menu normally (verified on flow.google.com).
+- Locked sizes (such as 4K behind "Upgrade") are skipped; the best enabled upscaled size is used instead.
+- Test harness hides its tile toolbar with CSS `:hover` and disables 4K, like Flow.
+
 ## 0.3.2 — 2026-10-23
 
 - **Fix: every picture was listed twice on the live site.** Flow's generation records carry the media id in their first field, not the third as older open-source notes said, so grid entries and records never merged. The parser now works out the layout from the data itself (verified against a real project) and both layouts are covered by tests.
