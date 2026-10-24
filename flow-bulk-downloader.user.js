@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.8
+// @version      0.3.9
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -66,7 +66,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.8';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.9';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -873,7 +873,7 @@
     } catch (e) { /* ignore */ }
   })();
   function toastsSince(t0) { return toastLog.filter((x) => x.t >= t0); }
-  class UpscaleLimitError extends Error { constructor(toast) { super(`Flow reports the upscale limit: "${toast}"`); this.limit = true; this.toast = toast; } }
+  class UpscaleLimitError extends Error { constructor(toast, msg) { super(msg || `Flow reports the upscale limit: "${toast}"`); this.limit = true; this.toast = toast; } }
   class UpscaleDeferError extends Error { constructor(msg, noGrid) { super(msg); this.defer = true; this.noGrid = !!noGrid; } }
 
   function fireMouse(el, type, init) {
@@ -1128,7 +1128,13 @@
       if (sub) {
         lastMenuTexts = sub.map(textOf);
         const chosen = pickResolutionItem(sub, settings, item.kind);
-        if (!chosen) { pressEscape(); throw new Error('no upscaled entry found in: ' + lastMenuTexts.join(' | ')); }
+        if (!chosen) {
+          pressEscape();
+          const labelRe = new RegExp(escapeRe(settings.upscaleLabel || 'upscal'), 'i');
+          const grey = sub.filter((el) => labelRe.test(textOf(el)) && !/gif/i.test(textOf(el)) && (!!el.disabled || el.getAttribute('aria-disabled') === 'true'));
+          if (grey.length) throw new UpscaleLimitError(grey.map(textOf).join(', '), `Flow's upscale entries are greyed out (${grey.map(textOf).join(', ')}), so no upscales are left`);
+          throw new Error('no upscaled entry found in: ' + lastMenuTexts.join(' | '));
+        }
         chosenText = textOf(chosen); upscaled = true;
         hoverEl(chosen); clickEl(chosen);
       }
@@ -1284,8 +1290,7 @@
       }
       if (settings.skipDone && !opts.ignoreDone) {
         const wantUp = wantsUpscale(kind, settings);
-        const orig = done[doneKey(it.mediaId, false)];
-        if (done[doneKey(it.mediaId, wantUp)] || (wantUp && orig && orig.upscaleFailed)) { out.skippedDone++; continue; }
+        if (done[doneKey(it.mediaId, wantUp)]) { out.skippedDone++; continue; }
       }
       out.keep.push(it);
     }
@@ -1363,7 +1368,7 @@
       }
       const done = loadDone();
       let ok = 0, fail = 0, upscalesDone = 0, deferred = 0, failStreak = 0, noGridStreak = 0, gridMissing = false;
-      let retryIdx = -1, hiddenRetries = 0;
+      let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0;
       const hitLimit = (reason) => {
         store.set('fbd.upscaleLimitAt', Date.now());
         upAllowed = false;
@@ -1383,6 +1388,7 @@
           if (settings.onLimit !== 'originals') { deferred += keep.length - i; log('Remaining upscales are deferred to a later run.'); break; }
         }
         if (needsUp && !upAllowed && settings.onLimit !== 'originals') { deferred++; continue; }
+        if (needsUp && !upAllowed && done[doneKey(it.mediaId, false)]) { deferred++; continue; } // original already saved; it waits for upscaling
         if (needsUp && upAllowed && settings.maxUpscalesPerRun > 0 && upscalesDone >= settings.maxUpscalesPerRun) {
           if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining upscales are deferred to the next run.`);
           deferred++; continue;
@@ -1398,16 +1404,23 @@
             try {
               r = await uiDownloadUpscaled(it, settings);
               if (r.upscaled) {
-                upscalesDone++; recordUpscale();
+                upscalesDone++; recordUpscale(); upFailStreak = 0;
                 const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
                 if (pauseMs && i < keep.length - 1) activity('Waiting before the next one so Flow is not rushed…', { untilMs: pauseMs });
                 await pacedSleep(pauseMs);
               }
             } catch (e) {
-              if (e && e.limit) {
-                hitLimit(e.message);
-                if (settings.onLimit === 'originals') { log('Continuing with original quality for the remaining pictures; they stay queued for upscaling after the pause.'); r = await downloadItem(it, settings, log); }
-                else { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these pictures will be retried.`); deferred++; break; }
+              if (stopFlag) { log('Stopped.'); break; }
+              const hadOrig = !!done[doneKey(it.mediaId, false)];
+              let limitMsg = e && e.limit ? e.message : '';
+              // Flow does not always word the limit clearly, so two failed upscales in a row count as the limit
+              if (!limitMsg && !(e && e.defer) && ++upFailStreak >= 2) limitMsg = `${upFailStreak} upscales failed in a row (last: ${e.message}), so Flow's upscale limit is probably reached`;
+              if (limitMsg) {
+                hitLimit(limitMsg);
+                if (settings.onLimit !== 'originals') { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these items will be retried.`); deferred++; break; }
+                log('Continuing with original quality for the rest; they stay queued for upscaling after the pause.');
+                if (hadOrig) { deferred++; log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
+                r = await downloadItem(it, settings, log);
               } else if (e && e.defer && (tabHidden() || hiddenAt >= attemptAt) && hiddenRetries++ < 3) {
                 i--; continue; // the tab was hidden mid-attempt: wait for it, then retry this picture
               } else if (e && e.defer) {
@@ -1418,8 +1431,13 @@
                 continue;
               } else if (!settings.fallbackOriginal) {
                 throw e;
+              } else if (hadOrig) {
+                deferred++;
+                log(`  upscale failed for ${it.mediaId.slice(0, 8)}: ${e.message}; its original is already saved, so it stays queued for upscaling`);
+                await pacedSleep(settings.delayMs);
+                continue;
               } else {
-                log(`  upscale failed for ${it.mediaId.slice(0, 8)}: ${e.message} → saving original instead`);
+                log(`  upscale failed for ${it.mediaId.slice(0, 8)}: ${e.message} → saving the original instead (it stays queued for upscaling)`);
                 r = await downloadItem(it, settings, log); upscaleFailed = true;
               }
             }
@@ -1429,7 +1447,7 @@
           }
           try { await writeSidecar(it, r, settings); } catch (e) { log(`  sidecar failed: ${e.message}`); }
           ok++; failStreak = 0;
-          done[doneKey(it.mediaId, !!r.upscaled)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, upscaleFailed };
+          done[doneKey(it.mediaId, !!r.upscaled)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed };
           saveDone(done);
           rows.push({
             savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '',
@@ -1797,10 +1815,10 @@
                 <label>and pause upscaling for <input type="number" id="limitPause" min="1" step="1"> h</label>
               </div>
               <div class="row grid">
-                <label><input type="checkbox" id="fallbackOriginal"> If Flow says the upscale failed, save the original instead</label>
+                <label><input type="checkbox" id="fallbackOriginal"> If an upscale fails, save the original meanwhile (it stays queued for upscaling)</label>
               </div>
               <div class="row"><button class="btn sm" id="resetLimit" title="Forget that the daily limit was hit">Reset limit pause</button></div>
-              <div class="note">Upscaled mode drives Flow's own Download menu one picture or video at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Keep the project open and the tab visible. Items it cannot reach are deferred to the next run. Video upscales take longer, so they get three times the upscale timeout.</div>
+              <div class="note">Upscaled mode drives Flow's own Download menu one picture or video at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Two failed upscales in a row, or greyed-out upscale entries, also count as the daily limit. Keep the project open and the tab visible. Items it cannot reach are deferred to the next run. Video upscales take longer, so they get three times the upscale timeout.</div>
             </details>
 
             <details>

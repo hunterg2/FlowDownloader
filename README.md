@@ -134,8 +134,11 @@ Good to know:
   Upscaling → On the daily limit**) and upscaling pauses for 24 hours. The top strip shows how
   many upscales you've done in the last 24 hours. If you know your limit, enter it as the
   **Daily cap** and the script stops just before it.
-- If Flow's upscale fails, the original is saved instead, so you still get the picture or
-  video.
+- If an upscale fails, the original is saved meanwhile, so you still get the picture or video.
+  It stays queued, and the next upscaled run tries the upscale again (without saving the
+  original twice).
+- Flow doesn't always say clearly that the limit is reached, so **two failed upscales in a
+  row**, or upscale entries greyed out in Flow's menu, also count as the daily limit.
 - An item it couldn't reach (for example because the page was busy) is **deferred**:
   nothing is saved, it isn't marked as done, and the next run tries it again.
 - **Original and upscaled are tracked separately.** If you already saved something at original
@@ -336,7 +339,8 @@ Under **Options → Upscaling**:
   24 hours.
 - **On the daily limit:** stop the run (default) or continue with originals, **and pause
   upscaling for** N hours (default 24). **Reset limit pause** overrides it.
-- **If Flow says the upscale failed, save the original instead** (on by default).
+- **If an upscale fails, save the original meanwhile** (on by default). The item stays queued
+  for upscaling. Two failed upscales in a row count as the daily limit.
 - Three failures in a row pause two minutes; six stop the run.
 
 ### Automation

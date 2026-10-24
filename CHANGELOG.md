@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.9 — 2026-10-23
+
+- **"Stop the run" on the daily limit now really stops.** Flow doesn't always word the limit clearly, so the script took it for an ordinary failed upscale and saved originals instead. Now two failed upscales in a row, or upscale entries greyed out in Flow's menu, count as the daily limit and follow the **On the daily limit** setting.
+- **An original saved after a failed upscale no longer counts as done for upscaled runs.** The item stays queued and the next upscaled run tries the upscale again, without saving the original a second time. The same goes for "continue with originals" after the limit: items whose original is already saved are not downloaded again.
+- Pressing Stop during an upscale no longer saves the original as a fallback.
+- The history now records the quality each file was saved at (for example "2K Upscaled").
+
 ## 0.3.8 — 2026-10-23
 
 - **Videos can be upscaled too.** The Download tab has a quality switch for each type: **Pictures** (Original | Upscaled 2K) and **Videos** (Original | Upscaled 1080p), so they can be mixed. Upscaled videos go through Flow's own video menu (270p GIF / 720p Original / 1080p Upscaled / 4K Upscaled) and are saved as `… [1080p Upscaled].mp4`. **Video size** sits next to **Picture size** under Options → Upscaling.
