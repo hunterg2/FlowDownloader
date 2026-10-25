@@ -337,6 +337,10 @@ test('pictures and videos each have their own quality', () => {
   assert.equal(H.doneKey('m1', true, '4 K'), 'm1|up:4k');
   assert.equal(H.upscalable({ kind: 'image' }, both), true);
   assert.equal(H.upscalable({ kind: 'image', inGrid: false }, both), false); // a reference image Flow's grid doesn't show
+  assert.equal(H.isUploadedFile({ title: '39019702f1307bdb9580d0ab2a78f1ce.jpg' }), true);
+  assert.equal(H.isUploadedFile({ title: 'my-upload.PNG' }), true);
+  assert.equal(H.isUploadedFile({ title: 'a knight on a horse at dawn' }), false);
+  assert.equal(H.isUploadedFile({ title: '' }), false);
   assert.equal(H.thumbUrl({ urls: { poster: ['https://lh3.googleusercontent.com/asb/TK1X=s256'] } }), 'https://lh3.googleusercontent.com/asb/TK1X=s96');
   assert.equal(H.thumbUrl({ urls: { poster: [] } }), '');
   const items = [{ kind: 'image' }, { kind: 'video' }, { kind: 'video' }];

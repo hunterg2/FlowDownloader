@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.13 — 2026-10-25
+
+- **Fix: uploads saved before 0.3.12 still came down again in 2K runs.** Skip already saved now treats an uploaded picture (its title is a file name such as `<hash>.jpg`) as done once its original is in the history, since Flow can't upscale it.
+
 ## 0.3.12 — 2026-10-24
 
 - **Pick items by hand.** After a Scan, Matching items lists every match with a thumbnail and a checkbox. Untick what you don't want (Shift-click for a range, or Untick all and tick a few); the next Download or Test 1 leaves those out, and the button shows the ticked count. Unticked items aren't marked as done.

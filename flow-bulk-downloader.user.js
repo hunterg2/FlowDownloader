@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.12
+// @version      0.3.13
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.12';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.13';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -477,6 +477,9 @@
   /** Whether this item gets upscaled. Flow's upscale sizes live in the tile menu, so an item Flow
    *  doesn't show in the project grid (a reference image used in a prompt) is saved at original quality. */
   function upscalable(it, settings) { return wantsUpscale(it.kind, settings) && it.inGrid !== false; }
+  /** An uploaded picture: its title is the file name it was uploaded with (e.g. "<hash>.jpg"), where a
+   *  generated one's is the prompt. Flow's menu offers no upscaled sizes for these, so a saved original counts. */
+  function isUploadedFile(it) { return /^[^\n/\\]{1,120}\.(jpe?g|png|webp|gif|heic|heif|avif|bmp|tiff?)$/i.test(it.title || ''); }
   function anyUpscale(settings) { return settings.quality === 'upscaled' || settings.videoQuality === 'upscaled'; }
   /** Rough duration of a run over these items with the current pacing, in ms. */
   function estimateRunMs(items, settings, avgUpscaleMs, avgVideoUpscaleMs) {
@@ -519,7 +522,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, upscalable, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
+    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, upscalable, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -1317,7 +1320,7 @@
       if (settings.skipDone && !opts.ignoreDone) {
         const wantUp = upscalable(it, settings);
         const orig = done[doneKey(it.mediaId, false)];
-        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))] || (wantUp && orig && orig.noUpscale)) { out.skippedDone++; continue; }
+        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))] || (wantUp && orig && (orig.noUpscale || isUploadedFile(it)))) { out.skippedDone++; continue; }
       }
       out.keep.push(it);
     }
