@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.13**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.14**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -217,8 +217,14 @@ from the files. It only downloads something again if:
 **I lost my history (new PC, reinstall). How do I avoid downloading everything again?**
 Before a reinstall or a move, use **Tools → Export backup**, and **Import backup…** afterwards.
 If the history is already gone, **Tools → Mark all current as done** records everything in the
-project (all dates, for the types, filters and quality you've set) as downloaded without
-downloading anything, so future runs only fetch newer items.
+project between **From** and **To** (for the types, filters and quality you've set) as downloaded
+without downloading anything, so runs skip it. Set From and To to the pictures you already have.
+
+**I marked too much as done. How do I undo it?**
+Set **From**/**To** and the quality to cover the pictures you don't have, then use
+**Tools → Undo marks in range**. It removes only the marks that button made; pictures the script
+really downloaded stay counted. (Before 0.3.14, Mark all current as done ignored From/To and
+marked the whole project.)
 
 **Can I click around in Flow while it's downloading?**
 It depends on the quality:
@@ -397,7 +403,8 @@ Under **Options → Upscaling**:
 **Tools → Export backup** saves settings, download history, discovered projects, manifest and
 learned values as a JSON file. **Import backup…** loads it back (settings are replaced; history
 and manifest are merged). **Mark all current as done** records everything in the selected
-project(s) as downloaded, for all dates, without downloading. **Clear history** forgets the
+project(s) between From and To as downloaded, without downloading; **Undo marks in range** takes
+those marks back for From/To at the chosen quality. **Clear history** forgets the
 history (files on disk are untouched).
 
 ### Learn mode (when Flow changes)

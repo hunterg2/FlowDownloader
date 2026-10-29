@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.14 — 2026-10-28
+
+- **New: Tools → Undo marks in range.** It takes back "Mark all current as done" for the pictures between From and To at the chosen quality. Pictures the script really downloaded stay counted.
+- **Fix: Mark all current as done ignored From/To** and marked every picture in the project, including ones never saved at that quality. It now only marks between From and To.
+- **2K runs no longer sweep the whole project from the top when one picture isn't where expected.** When its place in the grid is known, the script now looks a few screens up and down from there, then moves on. The full sweep from the top only runs when the grid order isn't known.
+
 ## 0.3.13 — 2026-10-25
 
 - **Fix: uploads saved before 0.3.12 still came down again in 2K runs.** Skip already saved now treats an uploaded picture (its title is a file name such as `<hash>.jpg`) as done once its original is in the history, since Flow can't upscale it.

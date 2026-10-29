@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.13
+// @version      0.3.14
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.13';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.14';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -1016,7 +1016,7 @@
       sc.scrollTop = Math.max(0, y); nudgeScroll(sc);
       await settleGrid(sc, g.byToken);
     }
-    return { tile: findTileNow(item) };
+    return { tile: findTileNow(item), known: true };
   }
   async function findTile(item) {
     let tile = findTileNow(item);
@@ -1028,9 +1028,25 @@
     const j = await jumpToTile(item, sc);
     if (j.tile) return j.tile;
     if (j.absent) return null;
+    const startTop = sc.scrollTop;
+    if (j.known) {
+      // Its grid position is known, so it is near here: look a few screens up and down rather than
+      // sweeping the whole project from the top for one picture.
+      activity('Looking around that spot in the grid…');
+      const stepPx = Math.max(200, sc.clientHeight * 0.6);
+      for (let k = 1; k <= 8 && !stopFlag; k++) {
+        for (const dir of [1, -1]) {
+          sc.scrollTop = Math.max(0, startTop + dir * k * stepPx); nudgeScroll(sc);
+          await sleep(300);
+          tile = findTileNow(item);
+          if (tile) return tile;
+        }
+      }
+      sc.scrollTop = startTop; nudgeScroll(sc);
+      return null;
+    }
     // Fallback when the grid order is unknown: sweep the whole grid from the top.
     activity('Searching the whole grid for it…');
-    const startTop = sc.scrollTop;
     sc.scrollTop = 0; nudgeScroll(sc); await sleep(350);
     let lastTop = -1, stalls = 0;
     for (let i = 0; i < 400 && !stopFlag; i++) {
@@ -1523,9 +1539,20 @@
   }
   const MANIFEST_COLUMNS = ['savedAt', 'mediaId', 'projectId', 'projectTitle', 'title', 'created', 'kind', 'model', 'quality', 'file', 'bytes', 'status', 'flowSizeBytes'];
 
+  /** From/To as shown in the confirm prompts. */
+  function rangeText(settings) {
+    const since = localInputToMs(settings.sinceLocal), until = localInputToMs(settings.untilLocal);
+    return `${since != null ? 'from ' + fmtHuman(since) : 'from the start'} ${until != null ? 'to ' + fmtHuman(until) : 'up to now'}`;
+  }
+  function qualityText(settings) {
+    const q = (kind) => (wantsUpscale(kind, settings) ? `upscaled ${pickUpscaleSize(kind, settings)}` : 'original');
+    return [settings.images && `pictures ${q('image')}`, settings.videos && `videos ${q('video')}`].filter(Boolean).join(', ') || 'the chosen quality';
+  }
+  // Both go by From/To (2026-10-28: marking a whole project once covered weeks of pictures that had
+  // never been saved in 2K, and there was no way to take it back).
   async function markAllDone(settings, log) {
     const s = await scan(settings, log);
-    const f = filterItems(s.items, settings, { ignoreDates: true, ignoreDone: true });
+    const f = filterItems(s.items, settings, { ignoreDone: true });
     const done = loadDone();
     let n = 0;
     for (const it of f.keep) {
@@ -1534,7 +1561,22 @@
       if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: up, upscaleFailed: false, manual: true }; n++; }
     }
     saveDone(done);
-    log(`Marked ${n} item(s) as already downloaded. Future runs will only pick up newer items.`);
+    log(`Marked ${n} item(s) ${rangeText(settings)} as already downloaded.`);
+  }
+  /** Removes the "marked as done manually" entries at the chosen quality for items in From/To.
+   *  Files the script really saved stay in the history. */
+  async function unmarkManual(settings, log) {
+    const s = await scan(settings, log);
+    const f = filterItems(s.items, settings, { ignoreDone: true });
+    const done = loadDone();
+    let n = 0;
+    for (const it of f.keep) {
+      const up = upscalable(it, settings);
+      const k = doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
+      if (done[k] && done[k].manual) { delete done[k]; n++; }
+    }
+    saveDone(done);
+    log(`Removed ${n} hand mark(s) ${rangeText(settings)}. Those items will be offered again; files the script saved are still counted.`);
   }
 
   function buildBackup(settings) {
@@ -1928,7 +1970,8 @@
           <section class="pane" data-pane="tools">
             <h4>History</h4>
             <div class="btns">
-              <button class="btn" id="markDone" title="Mark everything currently in the selected projects as downloaded, so future runs only pick up new items">Mark all current as done</button>
+              <button class="btn" id="markDone" title="Mark everything in the selected projects between From and To as downloaded at the chosen quality, so runs skip it">Mark all current as done</button>
+              <button class="btn" id="unmarkDone" title="Undo Mark all current as done for items between From and To at the chosen quality. Files the script saved stay counted">Undo marks in range</button>
               <button class="btn" id="clear" title="Forget which files were already downloaded">Clear history</button>
             </div>
             <h4>Export &amp; backup</h4>
@@ -2328,7 +2371,7 @@
 
     /** compact: shrink to the run card while this run goes (downloads, not scans). */
     function setRunning(on, compact) {
-      for (const id of ['scan', 'download', 'test1', 'markDone']) $(id).disabled = on;
+      for (const id of ['scan', 'download', 'test1', 'markDone', 'unmarkDone']) $(id).disabled = on;
       // Lock the settings too: the run uses what was set when it started, and buttons such as
       // Backup save the form, so a change made mid-run could apply partway through.
       locked = on;
@@ -2439,9 +2482,17 @@
     $('markDone').addEventListener('click', async () => {
       if (running) return;
       readForm();
-      if (!confirm('Mark everything currently in the selected project(s) as already downloaded? Nothing is downloaded; future runs will only pick up newer items.')) return;
+      if (!confirm(`Mark everything in the selected project(s) ${rangeText(settings)} as already downloaded at ${qualityText(settings)}? Nothing is downloaded; runs will skip these.`)) return;
       running = true; stopFlag = false; setRunning(true);
       try { await markAllDone(settings, log); } catch (e) { log(`Error: ${e.message}`); }
+      finally { running = false; setRunning(false); }
+    });
+    $('unmarkDone').addEventListener('click', async () => {
+      if (running) return;
+      readForm();
+      if (!confirm(`Undo "Mark all current as done" for the selected project(s) ${rangeText(settings)} at ${qualityText(settings)}? Only hand marks are removed; files the script saved stay counted.`)) return;
+      running = true; stopFlag = false; setRunning(true);
+      try { await unmarkManual(settings, log); } catch (e) { log(`Error: ${e.message}`); }
       finally { running = false; setRunning(false); }
     });
     $('clear').addEventListener('click', () => {
