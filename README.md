@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.14**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.15**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -136,6 +136,13 @@ Good to know:
   Upscaling → On the daily limit**) and upscaling pauses for 24 hours. The top strip shows how
   many upscales you've done in the last 24 hours. If you know your limit, enter it as the
   **Daily cap** and the script stops just before it.
+- **Time estimates count the limit.** When Flow stops a run at its limit, the script remembers
+  how many upscales Flow allowed in the 24 hours before (a **Daily cap** you set wins over it).
+  Scan then says when the limit will end the run, for example *"The daily upscale limit (500 a
+  day) stops this run after about 380 upscales: ≈2 h 28 min, until about 23:32. Upscaling all
+  4,200 would take ≈27 h of running with no limit. That leaves 3,820 for later, about 8 more
+  days at 500 a day."* During a run the progress card counts down to the limit the same way.
+  Until the limit is known, Scan says the run may stop sooner.
 - If an upscale fails, the item is counted as failed and stays queued for the next run. Tick
   **If an upscale fails, save the original meanwhile** (Options → Upscaling, off by default) to
   get the original in the meantime; the next upscaled run still tries the upscale again (without
@@ -373,7 +380,8 @@ Under **Options → Upscaling**:
 - Video upscales take longer, so they get three times the **Upscale timeout** (Tools → Advanced).
 - **Pause between** upscales (default 8 s) and **Max per run** keep each run modest.
 - **Daily cap:** stops before Flow's daily limit, using the script's own count of the last
-  24 hours.
+  24 hours. Time estimates use it too. Leave it at 0 to use the limit learned the last time
+  Flow stopped a run (shown on the Upscaling heading as *Flow's limit ≈N a day*).
 - **On the daily limit:** stop the run (default) or continue with originals, **and pause
   upscaling for** N hours (default 24). **Reset limit pause** overrides it.
 - **If an upscale fails, save the original meanwhile** (off by default). The item stays queued

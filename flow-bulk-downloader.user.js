@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.14
+// @version      0.3.15
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.14';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.15';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -491,11 +491,59 @@
     for (const it of items) ms += !upscalable(it, settings) ? perOrig : it.kind === 'video' ? perVideoUp : perUp;
     return ms;
   }
+  /** Plans a run against the upscale limits, walking the items in run order the way runDownload
+   *  does. lim: { now, perDay (0 = not known), log (times of past upscales), pausedUntil, runUps
+   *  (upscales already done this run) }. Returns how long the run lasts (ms), how many upscales fit
+   *  (ups) out of how many are wanted, what limits it (blocked: 'paused' | 'day', runCapped) and
+   *  fullMs, the time every item would take with no limit at all. */
+  function planRun(items, settings, lim, avgUpscaleMs, avgVideoUpscaleMs) {
+    const perDay = lim.perDay > 0 ? lim.perDay : 0, perRun = settings.maxUpscalesPerRun > 0 ? settings.maxUpscalesPerRun : 0;
+    const stopOnLimit = settings.onLimit !== 'originals';
+    const origMs = 1500 + Math.max(0, settings.delayMs || 0);
+    const log = (lim.log || []).filter((x) => x > lim.now - 86400000).sort((a, b) => a - b);
+    let t = lim.now, head = 0, ups = 0, wanted = 0, fullMs = 0, stopped = false, runCapped = false, blockedAt = 0;
+    let blocked = lim.pausedUntil > lim.now ? 'paused' : ''; // runDownload checks the pause once, at the start
+    for (const it of items) {
+      const ms = estimateRunMs([it], settings, avgUpscaleMs, avgVideoUpscaleMs), up = upscalable(it, settings);
+      fullMs += ms;
+      if (up) wanted++;
+      if (stopped) continue;
+      if (!up) { t += ms; continue; }
+      if (!blocked && perDay) {
+        while (head < log.length && log[head] <= t - 86400000) head++;
+        if (log.length - head >= perDay) { blocked = 'day'; blockedAt = t; if (stopOnLimit) { stopped = true; continue; } }
+      }
+      if (blocked) { if (!stopOnLimit) t += origMs; continue; } // saved at original meanwhile, or deferred
+      if (perRun && (lim.runUps || 0) + ups >= perRun) { runCapped = true; continue; }
+      t += ms; ups++; log.push(t);
+    }
+    return { ms: t - lim.now, endAt: t, fullMs, wanted, ups, blocked, blockedAt, stopped, runCapped };
+  }
   function fmtDuration(ms) {
     const min = Math.round(Math.max(0, ms) / 60000);
     if (min < 1) return 'under a minute';
     if (min < 60) return `${min} min`;
     return `${Math.floor(min / 60)} h ${min % 60} min`;
+  }
+  /** The scan's time estimate in words, from planRun. lim.perDay and lim.perDayFrom say what the
+   *  daily upscale limit is and where that number comes from. */
+  function describePlan(p, settings, lim) {
+    const n = (k) => k.toLocaleString('en-US');
+    const at = (ms) => (new Date(ms).toDateString() === new Date(lim.now).toDateString() ? fmtHuman(ms).slice(11) : fmtHuman(ms));
+    const approx = (ms) => { const d = fmtDuration(ms); return d === 'under a minute' ? d : '≈' + d; };
+    const runs = `${approx(p.ms)}, until about ${at(p.endAt)}`;
+    if (!p.wanted) return `The run takes ${runs}.`;
+    const rest = p.wanted - p.ups;
+    const perDay = lim.perDay > 0 ? `${n(lim.perDay)} a day${lim.perDayFrom ? `, ${lim.perDayFrom}` : ''}` : '';
+    const days = lim.perDay > 0 ? ` That leaves ${n(rest)} for later, about ${n(Math.ceil(rest / lim.perDay))} more day${Math.ceil(rest / lim.perDay) === 1 ? '' : 's'} at ${n(lim.perDay)} a day.` : ` That leaves ${n(rest)} for later runs.`;
+    const all = ` Upscaling all ${n(p.wanted)} would take ${approx(p.fullMs)} of running with no limit.`;
+    const stop = settings.onLimit !== 'originals';
+    if (p.blocked === 'paused') return `Upscaling is paused until ${fmtHuman(lim.pausedUntil)} (the limit was hit), so the ${n(p.wanted)} to upscale are ${stop ? 'skipped' : 'saved at original quality meanwhile'}. The run takes ${runs}.${all}`;
+    if (p.stopped) return `The daily upscale limit (${perDay}) stops this run after about ${n(p.ups)} upscales: ${runs}.${all}${days}`;
+    if (p.blocked === 'day') return `About ${n(p.ups)} get upscaled before the daily limit (${perDay}); the rest are saved at original quality meanwhile. The run takes ${runs}.${all}${days}`;
+    if (p.runCapped) return `Max per run (${n(settings.maxUpscalesPerRun)}) upscales ${n(p.ups)} of ${n(p.wanted)} this run: ${runs}.${all}${days}`;
+    return `The run takes ${runs}` + (perDay ? `, within the daily upscale limit (${perDay}).`
+      : `. Flow's daily upscale limit isn't known yet, so it may stop sooner. The script learns the limit the first time Flow stops a run, or set Options → Upscaling → Daily cap.`);
   }
   function describeMatches(items, settings) {
     if (!items.length) return 'Nothing matches';
@@ -522,7 +570,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, fmtDuration, describeMatches, wantsUpscale, upscalable, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
+    gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -1379,6 +1427,36 @@
   }
   function recordUpscale() { const l = loadUpscaleLog(); l.push(Date.now()); saveUpscaleLog(l); }
   function upscalesLast24h() { return countSince(loadUpscaleLog(), Date.now() - 86400000); }
+  /** Flow's daily upscale limit as seen so far: how many upscales it allowed in the 24 h before it
+   *  stopped a run. The highest count seen wins, so a false alarm can't lower it. Copies older than
+   *  0.3.15 only kept the time of the last hit, so count the upscale log back from that. */
+  function knownFlowLimit(settings) {
+    const seen = store.get('fbd.flowLimits', []);
+    if (seen.length) return seen.reduce((a, b) => (b.count > a.count ? b : a));
+    const at = store.get('fbd.upscaleLimitAt', 0);
+    if (!at || settings.dailyUpscaleCap > 0) return null; // with a cap set, that time may be the cap's
+    const count = countSince(loadUpscaleLog().filter((t) => t <= at), at - 86400000);
+    return count >= 5 ? { count, at } : null;
+  }
+  function rememberFlowLimit() {
+    const count = upscalesLast24h();
+    if (count >= 5) store.set('fbd.flowLimits', store.get('fbd.flowLimits', []).concat({ count, at: Date.now() }).slice(-10));
+  }
+  /** What planRun needs to know about the upscale limits right now. Your own daily cap wins over the learned one. */
+  function upscaleLimits(settings, runUps) {
+    const now = Date.now(), flow = knownFlowLimit(settings), cap = settings.dailyUpscaleCap > 0 ? settings.dailyUpscaleCap : 0;
+    const limitAt = store.get('fbd.upscaleLimitAt', 0), pauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
+    return {
+      now, log: loadUpscaleLog(), runUps: runUps || 0,
+      perDay: cap || (flow ? flow.count : 0),
+      perDayFrom: cap ? 'your Daily cap' : flow ? `learned when Flow stopped a run on ${fmtHuman(flow.at).slice(0, 10)}` : '',
+      pausedUntil: limitAt && now - limitAt < pauseMs ? limitAt + pauseMs : 0,
+    };
+  }
+  function planFor(items, settings, runUps) {
+    const lim = upscaleLimits(settings, runUps);
+    return { lim, plan: planRun(items, settings, lim, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0)) };
+  }
 
   async function runDownload(settings, ui, opts) {
     opts = opts || {};
@@ -1417,10 +1495,12 @@
         }
         if (upAllowed && settings.dailyUpscaleCap > 0) log(`Upscales in the last 24 h: ${upscalesLast24h()} / ${settings.dailyUpscaleCap}`);
       }
+      { const { lim, plan } = planFor(keep, settings); log(describePlan(plan, settings, lim)); }
       const done = loadDone();
       let ok = 0, fail = 0, upscalesDone = 0, deferred = 0, failStreak = 0, noGridStreak = 0, gridMissing = false;
       let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0;
       const hitLimit = (reason) => {
+        rememberFlowLimit();
         store.set('fbd.upscaleLimitAt', Date.now());
         upAllowed = false;
         log(`⚠ ${reason}`);
@@ -1444,7 +1524,7 @@
           if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining upscales are deferred to the next run.`);
           deferred++; continue;
         }
-        ui.progress(i, keep.length, it, { ok, fail, deferred });
+        ui.progress(i, keep.length, it, { ok, fail, deferred }, { keep, runUps: upscalesDone });
         try {
           let r, upscaleFailed = false, noUpscale = false;
           if (needsUp && upAllowed) {
@@ -1583,7 +1663,7 @@
     return {
       app: 'flow-bulk-downloader', version: VERSION, exportedAt: new Date().toISOString(),
       settings, done: loadDone(), projects: loadProjects(), upscaleLog: loadUpscaleLog(), manifest: loadManifest(), learned: loadLearned(),
-      lastRun: store.get('fbd.lastRun', null), upscaleLimitAt: store.get('fbd.upscaleLimitAt', 0),
+      lastRun: store.get('fbd.lastRun', null), upscaleLimitAt: store.get('fbd.upscaleLimitAt', 0), flowLimits: store.get('fbd.flowLimits', []),
     };
   }
   function restoreBackup(b) {
@@ -1596,6 +1676,7 @@
     if (b.learned) saveLearned(Object.assign({}, loadLearned(), b.learned));
     if (b.lastRun) store.set('fbd.lastRun', Math.max(store.get('fbd.lastRun', 0) || 0, b.lastRun));
     if (b.upscaleLimitAt) store.set('fbd.upscaleLimitAt', Math.max(store.get('fbd.upscaleLimitAt', 0) || 0, b.upscaleLimitAt));
+    if (Array.isArray(b.flowLimits)) { const have = store.get('fbd.flowLimits', []), at = new Set(have.map((x) => x.at)); store.set('fbd.flowLimits', have.concat(b.flowLimits.filter((x) => x && x.count && !at.has(x.at))).sort((a, c) => a.at - c.at).slice(-10)); }
   }
 
   function buildDiagnostics(settings) {
@@ -1892,7 +1973,7 @@
               </div>
               <div class="row">
                 <label>Max per run <input type="number" id="maxUpscales" min="0" step="1" title="0 = no cap"></label>
-                <label>Daily cap <input type="number" id="dailyCap" min="0" step="1" title="0 = unknown; otherwise stop before Flow refuses"></label>
+                <label>Daily cap <input type="number" id="dailyCap" min="0" step="1" title="0 = use the limit learned from Flow; otherwise stop before Flow refuses, and use this number for time estimates"></label>
               </div>
               <div class="row">
                 <label>On the daily limit <select id="onLimit"><option value="stop">stop the run</option><option value="originals">continue with originals</option></select></label>
@@ -1902,7 +1983,7 @@
                 <label><input type="checkbox" id="fallbackOriginal"> If an upscale fails, save the original meanwhile (it stays queued for upscaling)</label>
               </div>
               <div class="row"><button class="btn sm" id="resetLimit" title="Forget that the daily limit was hit">Reset limit pause</button></div>
-              <div class="note">Upscaled mode drives Flow's own Download menu one picture or video at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Two failed upscales in a row, or greyed-out upscale entries, also count as the daily limit. Keep the project open and the tab visible. Items it cannot reach are deferred to the next run. Video upscales take longer, so they get three times the upscale timeout.</div>
+              <div class="note">Upscaled mode drives Flow's own Download menu one picture or video at a time, waits for each file, and watches Flow's messages for "upscale failed" or the daily limit. Two failed upscales in a row, or greyed-out upscale entries, also count as the daily limit. Keep the project open and the tab visible. Items it cannot reach are deferred to the next run. Video upscales take longer, so they get three times the upscale timeout. When Flow stops a run at its limit, the script remembers how many upscales Flow allowed in the 24 h before, and Scan and the progress card use that number to tell you when a run will hit the limit. A Daily cap you set wins over it.</div>
             </details>
 
             <details>
@@ -2161,7 +2242,8 @@
       if (settings.includeNotInGrid) f.push('hidden pictures included');
       $('sumFilters').textContent = f.join(' · ') || 'none';
       $('sumUpscale').textContent = `${settings.imageUpscale || '2K'} pictures, ${settings.videoUpscale || '1080p'} videos, ${settings.upscalePauseSec || 0} s apart` +
-        (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day` : '');
+        (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day`
+          : (() => { const fl = knownFlowLimit(settings); return fl ? `, Flow's limit ≈${fl.count} a day` : ''; })());
       $('sumProjects').textContent = settings.scope === 'selected' ? `${(settings.selectedProjects || []).length} selected` : 'this project only';
       $('sumSaving').textContent = settings.downloadMode === 'tampermonkey' ? `Downloads/${settings.subfolder || ''}${settings.folderByProject ? '/project' : ''}${settings.folderByMonth ? '/month' : ''}` : 'Downloads folder, no subfolders';
       const a = [];
@@ -2268,9 +2350,18 @@
       }
       let eta = '', each = '';
       if (prog && prog.item && prog.n - prog.i > 1) {
-        const d = fmtDuration(prog.perMs * (prog.n - prog.i) - (Date.now() - prog.at));
-        eta = `${d === 'under a minute' ? 'Less than a minute' : 'About ' + d} left`;
-        each = ` (≈${Math.round(prog.perMs / 1000)} s each)`;
+        const since = Date.now() - prog.at, L = prog.left, p = L && L.plan;
+        const leftMs = L ? L.ms - since : prog.perMs * (prog.n - prog.i) - since;
+        const d = fmtDuration(leftMs), about = d === 'under a minute' ? 'less than a minute' : 'about ' + d;
+        const clock = (ms) => fmtHuman(ms).slice(new Date(ms).toDateString() === new Date().toDateString() ? 11 : 0);
+        if (p && p.stopped) {
+          eta = `The upscale limit ends this run in ${about}`;
+          each = ` (around ${clock(Date.now() + leftMs)}; all ${p.wanted.toLocaleString('en-US')} left would take ≈${fmtDuration(L.fullMs - since)} with no limit)`;
+        } else {
+          eta = `${about[0].toUpperCase()}${about.slice(1)} left`;
+          each = p && p.blocked === 'day' ? ` (upscaling stops at the daily limit around ${clock(Date.now() + (p.blockedAt - L.lim.now) * L.k - since)}; the rest are saved at original)`
+            : ` (≈${Math.round(prog.perMs / 1000)} s each)`;
+        }
       }
       const c = prog && prog.counts;
       const tally = c && (c.ok || c.fail || c.deferred) ? `✔ ${c.ok} saved${c.fail ? ` · ✘ ${c.fail} failed` : ''}${c.deferred ? ` · ⏭ ${c.deferred} deferred` : ''}` : '';
@@ -2289,11 +2380,19 @@
       if (!act && actTimer) { clearInterval(actTimer); actTimer = null; }
       renderProgress();
     };
-    function progress(i, n, item, counts) {
+    function progress(i, n, item, counts, ctx) {
       setBar(n ? i / n : 0);
       if (i === 0 || !runStartAt) runStartAt = Date.now();
       const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0));
-      prog = item ? { i, n, item, perMs, at: Date.now(), counts } : null;
+      let left = null;
+      if (item && ctx && ctx.keep) {
+        // plan the rest against the upscale limits, scaled by how fast this run has really gone
+        const { lim, plan } = planFor(ctx.keep.slice(i), settings, ctx.runUps);
+        const planned = i > 0 ? estimateRunMs(ctx.keep.slice(0, i), settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0)) : 0;
+        const k = planned > 0 ? Math.min(4, Math.max(0.25, (Date.now() - runStartAt) / planned)) : 1;
+        left = { plan, lim, k, ms: plan.ms * k, fullMs: plan.fullMs * k };
+      }
+      prog = item ? { i, n, item, perMs, at: Date.now(), counts, left } : null;
       renderProgress();
     }
     function finish(text, frac) {
@@ -2428,9 +2527,10 @@
         const s = await scan(settings, log);
         const f = filterItems(s.items, settings);
         log(`Would download ${f.keep.length} item(s). Skipped: ${skipSummary(f)}.`);
-        const est = f.keep.length ? ` (≈${fmtDuration(estimateRunMs(f.keep, settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0)))} at the current pacing)` : '';
+        let est = '';
+        if (f.keep.length) { const { lim, plan } = planFor(f.keep, settings); const t = describePlan(plan, settings, lim); est = '\n' + t; log(t); }
         setBar(null);
-        finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}${est}.\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
+        finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}.${est}\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
         excluded.clear(); lastPick = -1;
         renderItems(f.keep, true);
         $('itemsBox').open = f.keep.length > 0;

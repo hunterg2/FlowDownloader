@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.15 — 2026-10-28
+
+- **Time estimates now count the upscale limit.** Scan says whether the daily limit will end the run, when (about how long and at what time), how many upscales fit before it, how long upscaling everything would take with no limit, and how many more days the rest needs. The progress card counts down to the limit during a run. **Max per run** and a pause after the limit was hit are counted too.
+- **The script learns Flow's daily limit.** When Flow stops a run at its limit, it remembers how many upscales Flow allowed in the 24 hours before. The highest count seen is used, so a false alarm can't lower it. A **Daily cap** you set wins over it. Backups carry it.
+
 ## 0.3.14 — 2026-10-28
 
 - **New: Tools → Undo marks in range.** It takes back "Mark all current as done" for the pictures between From and To at the chosen quality. Pictures the script really downloaded stay counted.

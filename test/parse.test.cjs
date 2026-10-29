@@ -318,6 +318,39 @@ test('run estimate, duration text and match description', () => {
   assert.equal(H.describeMatches([], st), 'Nothing matches');
 });
 
+test('run plan counts against the upscale limits', () => {
+  const st = { quality: 'upscaled', imageUpscale: '2K', upscalePauseSec: 0, delayMs: 0, onLimit: 'stop' };
+  const per = 12000 + 3000; // default 12 s upscale + 3 s overhead
+  const pics = Array.from({ length: 10 }, () => ({ kind: 'image' }));
+  const now = Date.UTC(2026, 9, 28, 12);
+  // no limit known: everything fits
+  let p = H.planRun(pics, st, { now, perDay: 0, log: [] });
+  assert.deepEqual([p.ups, p.wanted, p.ms, p.fullMs, p.stopped], [10, 10, 10 * per, 10 * per, false]);
+  // 7 a day with 3 already used in the last 24 h: the run stops after 4
+  const used = [now - 3600000, now - 7200000, now - 10800000];
+  p = H.planRun(pics, st, { now, perDay: 7, log: used });
+  assert.deepEqual([p.ups, p.stopped, p.blocked, p.ms, p.fullMs], [4, true, 'day', 4 * per, 10 * per]);
+  // upscales older than 24 h drop out of the window during the run
+  p = H.planRun(pics, st, { now, perDay: 3, log: [now - 86400000 + 5000, now - 86400000 + 20000] });
+  assert.equal(p.ups, 3); // 1 if they never dropped out
+  // continue with originals: the rest are saved at original quality
+  p = H.planRun(pics, Object.assign({}, st, { onLimit: 'originals' }), { now, perDay: 7, log: used });
+  assert.deepEqual([p.ups, p.stopped, p.blocked, p.ms, p.blockedAt], [4, false, 'day', 4 * per + 6 * 1500, now + 4 * per]);
+  // paused at the start: nothing is upscaled, originals still come down
+  p = H.planRun(pics.concat({ kind: 'video' }), st, { now, perDay: 7, log: [], pausedUntil: now + 3600000 });
+  assert.deepEqual([p.ups, p.blocked, p.ms], [0, 'paused', 1500]);
+  // max per run skips the rest, counting the upscales this run already did
+  p = H.planRun(pics, Object.assign({}, st, { maxUpscalesPerRun: 5 }), { now, perDay: 0, log: [], runUps: 2 });
+  assert.deepEqual([p.ups, p.runCapped, p.ms], [3, true, 3 * per]);
+  // in words
+  const lim = { now, perDay: 7, perDayFrom: 'your Daily cap', log: used };
+  const text = H.describePlan(H.planRun(pics, st, lim), st, lim);
+  assert.match(text, /^The daily upscale limit \(7 a day, your Daily cap\) stops this run after about 4 upscales: ≈1 min, until about \d\d:\d\d\./);
+  assert.match(text, /Upscaling all 10 would take ≈3 min of running with no limit\. That leaves 6 for later, about 1 more day at 7 a day\.$/);
+  assert.match(H.describePlan(H.planRun(pics, st, { now, perDay: 0, log: [] }), st, { now, perDay: 0 }), /isn't known yet/);
+  assert.match(H.describePlan(H.planRun([{ kind: 'image' }], { quality: 'original' }, { now, log: [] }), { quality: 'original' }, { now }), /^The run takes under a minute, until about /);
+});
+
 test('pictures and videos each have their own quality', () => {
   const both = { quality: 'upscaled', videoQuality: 'upscaled', imageUpscale: '2K', videoUpscale: '1080p', upscalePauseSec: 0, delayMs: 0 };
   const vidsOnly = Object.assign({}, both, { quality: 'original' });
