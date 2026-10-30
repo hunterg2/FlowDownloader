@@ -382,4 +382,20 @@ test('pictures and videos each have their own quality', () => {
   assert.equal(H.estimateRunMs(items, vidsOnly, 10000, 40000), 1500 + 2 * (40000 + 3000));
 });
 
+test('deferred reasons group and the history marks read per quality', () => {
+  const g = H.groupDeferred([{ reason: 'a' }, { reason: 'b' }, { reason: 'b' }, { reason: 'c' }, { reason: 'b' }]);
+  assert.deepEqual(g[0], { reason: 'b', n: 3 });
+  assert.equal(g.length, 3);
+  assert.deepEqual(H.groupDeferred([]), []);
+  const up = { images: true, quality: 'upscaled', imageUpscale: '2K' }, orig = { images: true, quality: 'original' };
+  const it = { mediaId: 'm1', kind: 'image' };
+  assert.equal(H.markKey(it, up), 'm1|up');
+  assert.equal(H.markKey(it, orig), 'm1');
+  assert.equal(H.markState(it, up, {}), '');
+  assert.equal(H.markState(it, up, { m1: { name: 'x' } }), 'original'); // saved at original, still waits for 2K
+  assert.equal(H.markState(it, orig, { m1: { name: 'x' } }), 'saved');
+  assert.equal(H.markState(it, up, { 'm1|up': { manual: true } }), 'marked');
+  assert.equal(H.markState(it, up, { 'm1|up': { name: 'x' }, m1: {} }), 'saved');
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

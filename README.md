@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.15**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.16**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -92,6 +92,9 @@ This is the quick way. It saves the files exactly as Flow stores them, usually a
    button now shows the count, for example **Download 42**. **Untick any you don't want**
    (Shift-click to untick a range, or **Untick all** and tick just a few); the next Download or
    Test 1 leaves them out. Unticked items aren't marked as done, so they show up in the next scan.
+   Each row says whether it's already in the history (**✔ saved**, **✔ marked done**, or
+   *original saved, not upscaled yet*). **Mark ticked as done** and **Mark ticked as not done**
+   change the history for just the ticked ones, at the chosen quality, without downloading.
 6. Click **Test 1**. It saves just the newest matching item, so you can check it lands where
    you expect. The first time, Chrome asks whether this site may **download multiple files**:
    click **Allow**.
@@ -153,7 +156,9 @@ Good to know:
 - Flow doesn't always say clearly that the limit is reached, so **two failed upscales in a
   row**, or upscale entries greyed out in Flow's menu, also count as the daily limit.
 - An item it couldn't reach (for example because the page was busy) is **deferred**:
-  nothing is saved, it isn't marked as done, and the next run tries it again.
+  nothing is saved, it isn't marked as done, and the next run tries it again. Click
+  **⏭ N deferred** on the progress card (or **See the N deferred and why** after the run) to list
+  them with the reason for each, as far as the script can tell.
 - **Original, 2K (1080p for videos) and 4K are each tracked separately.** If you already saved
   something at original quality, a 2K run still downloads it again at 2K, and a 4K run
   downloads it again at 4K even if its 2K is saved.
@@ -228,7 +233,8 @@ project between **From** and **To** (for the types, filters and quality you've s
 without downloading anything, so runs skip it. Set From and To to the pictures you already have.
 
 **I marked too much as done. How do I undo it?**
-Set **From**/**To** and the quality to cover the pictures you don't have, then use
+For a few pictures: turn off **Skip already saved**, **Scan**, **Untick all**, tick the ones you
+don't have, and click **Mark ticked as not done**. For a whole stretch: set **From**/**To** and the quality to cover the pictures you don't have, then use
 **Tools → Undo marks in range**. It removes only the marks that button made; pictures the script
 really downloaded stay counted. (Before 0.3.14, Mark all current as done ignored From/To and
 marked the whole project.)

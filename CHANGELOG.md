@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.16 — 2026-10-30
+
+- **See what was deferred, and why.** Click **⏭ N deferred** on the progress card (or **See the N deferred and why** once the run ends) to list each deferred picture with its reason: the upscale limit, the per-run budget, its tile not found in the grid, another project, and so on. The log also sums up the reasons at the end of the run. When a limit stops a run, every picture it didn't reach now counts as deferred.
+- **Mark pictures done or not done by hand.** After a Scan, **Mark ticked as done** and **Mark ticked as not done** change the history for just the ticked pictures, at the chosen quality. Each row shows whether it's already saved, marked done, or saved only at original.
+
 ## 0.3.15 — 2026-10-28
 
 - **Time estimates now count the upscale limit.** Scan says whether the daily limit will end the run, when (about how long and at what time), how many upscales fit before it, how long upscaling everything would take with no limit, and how many more days the rest needs. The progress card counts down to the limit during a run. **Max per run** and a pause after the limit was hit are counted too.

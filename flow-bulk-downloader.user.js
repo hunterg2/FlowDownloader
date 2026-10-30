@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.15
+// @version      0.3.16
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.15';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.16';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -566,11 +566,32 @@
     return u ? u.split('=')[0] + '=s96' : '';
   }
 
+  /** Deferred items by reason, most common first: [{ reason, n }]. */
+  function groupDeferred(list) {
+    const m = new Map();
+    for (const d of list) m.set(d.reason, (m.get(d.reason) || 0) + 1);
+    return [...m].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n);
+  }
+
+  /** The history key for an item at the quality a run would save it at. */
+  function markKey(it, settings) {
+    const up = upscalable(it, settings);
+    return doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
+  }
+  /** What the history says about an item at that quality: 'saved', 'marked' (by hand),
+   *  'original' (only the original is saved; it still waits for upscaling) or ''. */
+  function markState(it, settings, done) {
+    const e = done[markKey(it, settings)];
+    if (e) return e.manual ? 'marked' : 'saved';
+    return upscalable(it, settings) && done[doneKey(it.mediaId, false)] ? 'original' : '';
+  }
+
   const helpers = {
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
     gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
+    groupDeferred, markKey, markState,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -1499,6 +1520,12 @@
       const done = loadDone();
       let ok = 0, fail = 0, upscalesDone = 0, deferred = 0, failStreak = 0, noGridStreak = 0, gridMissing = false;
       let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0;
+      // Each deferred item and why, so clicking "deferred" on the card can list them.
+      const deferredList = [];
+      const defer = (it, reason) => { deferred++; deferredList.push({ it, reason }); };
+      const deferRest = (from, reason) => { for (let j = from; j < keep.length; j++) defer(keep[j], reason); };
+      ui.setDeferred(deferredList);
+      const pausedText = () => { const at = store.get('fbd.upscaleLimitAt', 0); return at ? `upscaling is paused until ${fmtHuman(at + limitPauseMs)}` : 'upscaling is paused'; };
       const hitLimit = (reason) => {
         rememberFlowLimit();
         store.set('fbd.upscaleLimitAt', Date.now());
@@ -1510,19 +1537,19 @@
         if (stopFlag) { log('Stopped.'); break; }
         const it = keep[i];
         const needsUp = upscalable(it, settings);
-        if (needsUp && gridMissing) { deferred++; continue; }
+        if (needsUp && gridMissing) { defer(it, 'no usable project grid in this tab (open the project and keep the tab visible)'); continue; }
         if (needsUp && upAllowed && settings.dailyUpscaleCap > 0 && upscalesLast24h() >= settings.dailyUpscaleCap) {
           const oldest = Math.min(...loadUpscaleLog().filter((t) => Date.now() - t < 86400000));
           store.set('fbd.upscaleLimitAt', isFinite(oldest) ? oldest : Date.now());
           upAllowed = false;
           log(`⏸ Daily upscale cap of ${settings.dailyUpscaleCap} reached (counted locally); upscaling pauses until ${fmtHuman((isFinite(oldest) ? oldest : Date.now()) + limitPauseMs)}.`);
-          if (settings.onLimit !== 'originals') { deferred += keep.length - i; log('Remaining upscales are deferred to a later run.'); break; }
+          if (settings.onLimit !== 'originals') { deferRest(i, `the run stopped at your Daily cap of ${settings.dailyUpscaleCap} upscales; ${pausedText()}`); log('Remaining upscales are deferred to a later run.'); break; }
         }
-        if (needsUp && !upAllowed && settings.onLimit !== 'originals') { deferred++; continue; }
-        if (needsUp && !upAllowed && done[doneKey(it.mediaId, false)]) { deferred++; continue; } // original already saved; it waits for upscaling
+        if (needsUp && !upAllowed && settings.onLimit !== 'originals') { defer(it, `the upscale limit was reached and ${pausedText()}`); continue; }
+        if (needsUp && !upAllowed && done[doneKey(it.mediaId, false)]) { defer(it, `its original is already saved; it waits for upscaling (${pausedText()})`); continue; }
         if (needsUp && upAllowed && settings.maxUpscalesPerRun > 0 && upscalesDone >= settings.maxUpscalesPerRun) {
           if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining upscales are deferred to the next run.`);
-          deferred++; continue;
+          defer(it, `the per-run upscale budget of ${settings.maxUpscalesPerRun} was used up`); continue;
         }
         ui.progress(i, keep.length, it, { ok, fail, deferred }, { keep, runUps: upscalesDone });
         try {
@@ -1549,14 +1576,14 @@
               if (!limitMsg && !(e && e.defer) && ++upFailStreak >= 2) limitMsg = `${upFailStreak} upscales failed in a row (last: ${e.message}), so Flow's upscale limit is probably reached`;
               if (limitMsg) {
                 hitLimit(limitMsg);
-                if (settings.onLimit !== 'originals') { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these items will be retried.`); deferred++; break; }
+                if (settings.onLimit !== 'originals') { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these items will be retried.`); deferRest(i, `Flow's upscale limit stopped the run; ${pausedText()}`); break; }
                 log('Continuing with original quality for the rest; they stay queued for upscaling after the pause.');
-                if (hadOrig) { deferred++; log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
+                if (hadOrig) { defer(it, `Flow's upscale limit was reached and its original is already saved; it waits for upscaling (${pausedText()})`); log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
                 r = await downloadItem(it, settings, log);
               } else if (e && e.defer && (tabHidden() || hiddenAt >= attemptAt) && hiddenRetries++ < 3) {
                 i--; continue; // the tab was hidden mid-attempt: wait for it, then retry this picture
               } else if (e && e.defer) {
-                deferred++;
+                defer(it, e.message);
                 log(`  ⏭ ${it.mediaId.slice(0, 8)} deferred: ${e.message}`);
                 if (e.noGrid && ++noGridStreak >= 2) { gridMissing = true; log('No usable project grid in this tab — remaining pictures are deferred. Open the project, keep the tab visible, and run again.'); }
                 await pacedSleep(settings.delayMs);
@@ -1564,7 +1591,7 @@
               } else if (!settings.fallbackOriginal) {
                 throw e;
               } else if (hadOrig) {
-                deferred++;
+                defer(it, `upscale failed (${e.message}); its original is already saved, so it stays queued for upscaling`);
                 log(`  upscale failed for ${it.mediaId.slice(0, 8)}: ${e.message}; its original is already saved, so it stays queued for upscaling`);
                 await pacedSleep(settings.delayMs);
                 continue;
@@ -1607,7 +1634,8 @@
       }
       const doneMsg = `Done: ${ok} saved, ${fail} failed${upscalesDone ? `, ${upscalesDone} upscaled` : ''}${deferred ? `, ${deferred} deferred` : ''}.`;
       log(doneMsg);
-      ui.finish(stopFlag ? 'Stopped. ' + doneMsg : doneMsg, 1);
+      if (deferredList.length) log('Deferred, by reason:\n' + groupDeferred(deferredList).map((g) => `  ${g.n} × ${g.reason}`).join('\n'));
+      ui.finish(stopFlag ? 'Stopped. ' + doneMsg : doneMsg, 1, { ok, fail, deferred });
       if (!opts.limit && (ok || fail)) notifyUser(settings, 'Flow Bulk Downloader', `Done: ${ok} saved, ${fail} failed${deferred ? `, ${deferred} deferred` : ''}.`);
     } catch (e) {
       log(`Error: ${e.message}`);
@@ -1633,15 +1661,27 @@
   async function markAllDone(settings, log) {
     const s = await scan(settings, log);
     const f = filterItems(s.items, settings, { ignoreDone: true });
+    const n = markItemsDone(f.keep, settings);
+    log(`Marked ${n} item(s) ${rangeText(settings)} as already downloaded.`);
+  }
+  /** Hand marks: adds a "marked as done" entry at the chosen quality where there is none. Returns how many. */
+  function markItemsDone(items, settings) {
     const done = loadDone();
     let n = 0;
-    for (const it of f.keep) {
-      const up = upscalable(it, settings);
-      const k = doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
-      if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: up, upscaleFailed: false, manual: true }; n++; }
+    for (const it of items) {
+      const k = markKey(it, settings);
+      if (!done[k]) { done[k] = { name: '(marked as done manually)', at: Date.now(), project: it.projectId, bytes: 0, upscaled: upscalable(it, settings), upscaleFailed: false, manual: true }; n++; }
     }
     saveDone(done);
-    log(`Marked ${n} item(s) ${rangeText(settings)} as already downloaded.`);
+    return n;
+  }
+  /** Picked by hand in the Scan list, so real saves are removed too (at the chosen quality only). */
+  function markItemsNotDone(items, settings) {
+    const done = loadDone();
+    let n = 0;
+    for (const it of items) { const k = markKey(it, settings); if (done[k]) { delete done[k]; n++; } }
+    saveDone(done);
+    return n;
   }
   /** Removes the "marked as done manually" entries at the chosen quality for items in From/To.
    *  Files the script really saved stay in the history. */
@@ -1651,8 +1691,7 @@
     const done = loadDone();
     let n = 0;
     for (const it of f.keep) {
-      const up = upscalable(it, settings);
-      const k = doneKey(it.mediaId, up, up && pickUpscaleSize(it.kind, settings));
+      const k = markKey(it, settings);
       if (done[k] && done[k].manual) { delete done[k]; n++; }
     }
     saveDone(done);
@@ -1870,6 +1909,11 @@
         .items .pick input { flex:none; margin:0; }
         .items .pick img, .items .pick .noimg { width:36px; height:36px; flex:none; object-fit:cover; border-radius:4px; background:var(--field); }
         .items .pick.off { opacity:.45; }
+        .items .pick .why { display:block; color:var(--warn); font-size:11.5px; }
+        .items .pick .tag { color:var(--ok); }
+        .items .reasons { color:#c4c7c5; padding:2px 0 6px; }
+        .items .reasons div { border:none; padding:1px 0; }
+        .lines .link { font-size:12px; padding:0; }
         .items .pickBar { position:sticky; top:0; z-index:1; display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:var(--bg); padding:2px 0 6px; border-bottom:none; }
         .projects { max-height:120px; overflow:auto; }
         .projects label { display:flex; }
@@ -1941,6 +1985,7 @@
               <div class="lines" id="progress"></div>
             </div>
             <div class="tip" id="popupTip">Chrome's download pop-up can cover this panel. To turn it off: Chrome Settings → Downloads → turn off "Show downloads when they're done". Files still save normally. <button class="link" id="tipHide">Hide</button></div>
+            <details id="deferBox" hidden><summary><span id="deferHead">Deferred</span><span class="sum">not saved; the next run tries them again</span></summary><div class="items" id="deferItems"></div></details>
             <details id="itemsBox"><summary><span id="itemsHead">Matching items</span></summary><div class="items" id="items"><span class="muted">Scan to see matching items here.</span></div></details>
             <details id="logBox"><summary>Log <span class="badge" id="logBadge" hidden></span><span class="sum"><button class="link" id="copyLog" title="Copy the log to the clipboard">Copy</button></span></summary><div class="log" id="log"></div></details>
           </section>
@@ -2271,10 +2316,16 @@
       const kids = [];
       if (pickable) {
         const bar = mk('div', 'pickBar');
-        for (const [id, t] of [['pickAll', 'Tick all'], ['pickNone', 'Untick all']]) { const b = mk('button', 'link', t); b.id = id; b.type = 'button'; bar.append(b); }
+        for (const [id, t, tip] of [['pickAll', 'Tick all'], ['pickNone', 'Untick all'],
+          ['markPicked', 'Mark ticked as done', 'Add the ticked ones to the download history without downloading them; runs then skip them'],
+          ['unmarkPicked', 'Mark ticked as not done', 'Take the ticked ones out of the download history at the chosen quality, so runs offer them again']]) {
+          const b = mk('button', 'link', t); b.id = id; b.type = 'button'; if (tip) b.title = tip; bar.append(b);
+        }
         bar.append(mk('span', 'muted', 'Untick what you don\'t want; Shift-click ticks or unticks a range.'));
         kids.push(bar);
       }
+      const done = loadDone();
+      const TAGS = { saved: '✔ saved', marked: '✔ marked done', original: 'original saved, not upscaled yet' };
       items.slice(0, PICK_MAX).forEach((i, n) => {
         const row = mk(pickable ? 'label' : 'div', 'pick');
         if (pickable) {
@@ -2286,12 +2337,36 @@
         if (src) { const img = mk('img'); img.loading = 'lazy'; img.alt = ''; img.onerror = () => img.replaceWith(mk('span', 'noimg')); img.src = src; row.append(img); } else row.append(mk('span', 'noimg'));
         const txt = mk('span', '', `${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + i.model : ''} · ${i.title || '(untitled)'} `);
         txt.append(mk('span', 'muted', `${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}${i.inGrid === false ? ' · not in the grid' : ''}`));
+        const st = markState(i, settings, done);
+        if (st) txt.append(mk('span', st === 'original' ? 'muted' : 'tag', ` · ${TAGS[st]}`));
         row.append(txt);
         kids.push(row);
       });
       if (items.length > PICK_MAX) kids.push(mk('div', 'muted', `…and ${items.length - PICK_MAX} more${pickable ? ' (always included)' : ''}`));
+      const top = el.scrollTop;
       el.replaceChildren(...kids);
+      el.scrollTop = top;
       renderPickCount(pickable);
+    }
+    function markPicked(asDone) {
+      const picked = listed.slice(0, PICK_MAX).filter((i) => !excluded.has(i.mediaId));
+      if (!picked.length) { log('Nothing is ticked.'); return; }
+      const done = loadDone();
+      const states = picked.map((i) => markState(i, settings, done));
+      const q = qualityText(settings);
+      if (asDone) {
+        const n = states.filter((s) => s !== 'saved' && s !== 'marked').length;
+        if (!n) { log(`All ${picked.length} ticked item(s) are already in the history at ${q}.`); return; }
+        if (!confirm(`Mark ${n} ticked item(s) as already downloaded at ${q}? Nothing is downloaded; runs will skip them.`)) return;
+        log(`Marked ${markItemsDone(picked, settings)} ticked item(s) as done at ${q}.`);
+      } else {
+        const saved = states.filter((s) => s === 'saved').length, marked = states.filter((s) => s === 'marked').length;
+        if (!saved && !marked) { log(`None of the ${picked.length} ticked item(s) are in the history at ${q}.`); return; }
+        if (!confirm(`Mark ${saved + marked} ticked item(s) as not done at ${q}?${saved ? `\n${saved} of them were really saved by the script; they will be offered (and downloaded) again.` : ''} Files on disk are not touched.`)) return;
+        log(`Marked ${markItemsNotDone(picked, settings)} ticked item(s) as not done at ${q}; runs will offer them again.`);
+      }
+      renderItems(listed, true);
+      renderStatus();
     }
     function renderPickCount(pickable) {
       const n = listed.length, on = n - listed.filter((i) => excluded.has(i.mediaId)).length;
@@ -2301,6 +2376,11 @@
     let lastPick = -1;
     $('items').addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
+      if (b && (b.id === 'markPicked' || b.id === 'unmarkPicked')) {
+        if (running) { log('Wait for the run to finish (or Stop it) before changing marks.'); return; }
+        markPicked(b.id === 'markPicked');
+        return;
+      }
       if (b && (b.id === 'pickAll' || b.id === 'pickNone')) {
         const on = b.id === 'pickAll';
         for (const i of listed) { if (on) excluded.delete(i.mediaId); else excluded.add(i.mediaId); }
@@ -2324,8 +2404,48 @@
     });
     let prog = null, act = null, actTimer = null, runStartAt = 0;
     function setLines(el, lines) {
-      el.replaceChildren(...lines.map(([cls, text]) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; return d; }));
+      el.replaceChildren(...lines.map(([cls, text, extra]) => { const d = document.createElement('div'); d.className = cls; d.textContent = text; if (extra) d.append(extra); return d; }));
     }
+    // The deferred items of the current (or last) run, and the box that lists them.
+    let deferList = [], deferShown = -1;
+    function defLink(n, text) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'link defLink'; b.title = 'See which ones were deferred and why';
+      b.textContent = text || `⏭ ${n} deferred`;
+      return b;
+    }
+    function renderDeferred() {
+      const box = $('deferBox'), el = $('deferItems');
+      box.hidden = !deferList.length;
+      $('deferHead').textContent = `Deferred (${deferList.length})`;
+      if (!deferList.length) { el.replaceChildren(); deferShown = 0; return; }
+      if (!box.open || deferShown === deferList.length) return; // rows are built when the box is open
+      deferShown = deferList.length;
+      const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+      const why = mk('div', 'reasons');
+      for (const g of groupDeferred(deferList)) why.append(mk('div', '', `${g.n} × ${g.reason}`));
+      const kids = [why];
+      for (const { it, reason } of deferList.slice(0, PICK_MAX)) {
+        const row = mk('div', 'pick');
+        const src = thumbUrl(it);
+        if (src) { const img = mk('img'); img.loading = 'lazy'; img.alt = ''; img.onerror = () => img.replaceWith(mk('span', 'noimg')); img.src = src; row.append(img); } else row.append(mk('span', 'noimg'));
+        const txt = mk('span', '', `${fmtHuman(it.createdMs)} · ${it.kind} · ${it.title || '(untitled)'} `);
+        txt.append(mk('span', 'muted', it.mediaId.slice(0, 8)), mk('span', 'why', reason));
+        row.append(txt);
+        kids.push(row);
+      }
+      if (deferList.length > PICK_MAX) kids.push(mk('div', 'muted', `…and ${deferList.length - PICK_MAX} more`));
+      el.replaceChildren(...kids);
+    }
+    function setDeferred(list) { deferList = list; deferShown = -1; $('deferBox').open = false; renderDeferred(); }
+    $('deferBox').addEventListener('toggle', renderDeferred);
+    function showDeferred() {
+      if (view !== 'open') setView('open');
+      showTab('main');
+      $('deferBox').open = true; renderDeferred();
+      try { $('deferBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+    }
+    for (const id of ['progress', 'mLines']) $(id).addEventListener('click', (ev) => { if (ev.target.closest('.defLink')) showDeferred(); });
     function setBar(frac) {
       const pct = frac == null ? '' : `${Math.round(frac * 100)}%`;
       $('barfill').style.width = $('mBar').style.width = pct || '0%';
@@ -2364,11 +2484,18 @@
         }
       }
       const c = prog && prog.counts;
-      const tally = c && (c.ok || c.fail || c.deferred) ? `✔ ${c.ok} saved${c.fail ? ` · ✘ ${c.fail} failed` : ''}${c.deferred ? ` · ⏭ ${c.deferred} deferred` : ''}` : '';
-      if (eta || tally) {
-        full.push(['eta', [eta && eta + each, tally].filter(Boolean).join(' · ')]);
-        mini.push(['eta', [eta, tally].filter(Boolean).join(' · ')]);
+      if (prog && prog.text) {
+        // after a run: the message already has the counts, so only the way to the list
+        if (c && c.deferred) { const t = `⏭ See the ${c.deferred} deferred and why`; full.push(['eta', '', defLink(0, t)]); mini.push(['eta', '', defLink(0, t)]); }
+      } else {
+        const tally = c && (c.ok || c.fail) ? `✔ ${c.ok} saved${c.fail ? ` · ✘ ${c.fail} failed` : ''}` : '';
+        if (eta || tally || (c && c.deferred)) {
+          const line = (head) => [head, tally].filter(Boolean).join(' · ') + (c && c.deferred && (head || tally) ? ' · ' : '');
+          full.push(['eta', line(eta && eta + each), c && c.deferred ? defLink(c.deferred) : null]);
+          mini.push(['eta', line(eta), c && c.deferred ? defLink(c.deferred) : null]);
+        }
       }
+      renderDeferred();
       setLines($('progress'), full); setLines($('mLines'), mini);
       $('card').classList.toggle('idle', !count && !$('pPct').textContent); // no bar for idle or scan text
       $('pCount').textContent = $('mCount').textContent = count;
@@ -2395,9 +2522,9 @@
       prog = item ? { i, n, item, perMs, at: Date.now(), counts, left } : null;
       renderProgress();
     }
-    function finish(text, frac) {
+    function finish(text, frac, counts) {
       if (frac != null) setBar(frac);
-      prog = { text }; runStartAt = 0;
+      prog = { text, counts }; runStartAt = 0;
       const m = /(\d+) saved, (\d+) failed/.exec(text);
       $('fabBadge').textContent = m ? `✔ ${m[1]}${m[2] !== '0' ? ` ✘ ${m[2]}` : ''}` : '!';
       $('fab').title = text;
@@ -2491,7 +2618,7 @@
       $('minimize').hidden = !(on && compactRun);
       renderStatus();
     }
-    const ui = { log, renderItems, progress, setRunning, finish };
+    const ui = { log, renderItems, progress, setRunning, finish, setDeferred };
     function requestStop() { stopFlag = true; log('Stopping after the current file…'); activity('Stopping after the current file…'); }
 
     $('fab').addEventListener('click', () => {
