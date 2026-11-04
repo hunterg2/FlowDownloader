@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.16**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.17**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -207,8 +207,9 @@ quality you picked**. The quality is also in the file name (`[2K Upscaled]`) and
 manifest's quality column.
 
 **I picked 2K but some pictures were saved at original quality. Why?**
-Usually because Flow can't upscale them: reference images used in prompts (shown only with
-**Include pictures not shown in the project grid**) and uploads whose menu has no 2K option.
+Usually because Flow can't upscale them: pictures that aren't in the project grid (earlier
+versions of edits, reference images and the Trash, each only with its own box ticked) and uploads
+whose menu has no 2K option.
 The log says so for each one, and they count as done. The other reason is **If an upscale
 fails, save the original meanwhile** (Options → Upscaling, off by default): with it ticked, a
 failed upscale saves the original instead. Those pictures aren't marked as done for 2K: the
@@ -373,9 +374,17 @@ Under **Options → Saving & folders**:
 expression), **Model contains** (e.g. `NARWHAL`, `GEM_PIX`, `veo`, `abra`), and **Leave out my
 uploaded reference images** (experimental: skips items that have no generation record).
 
-Only pictures shown in the project grid are downloaded by default. Flow's listing also contains
-the reference images used in prompts; tick **Include pictures not shown in the project grid** to
-save those too (always at original quality: Flow can only upscale from the grid). **Include items with no date** adds items whose creation time can't be read.
+Only pictures shown in the project grid are downloaded by default. Flow's listing holds more,
+and three boxes add them, always at original quality since Flow can only upscale from the grid:
+
+- **Include earlier versions of edited pictures.** When you edit a picture, Flow stacks the
+  versions in one grid space and only the newest is a grid picture of its own.
+- **Include reference images used in prompts** that aren't in the grid.
+- **Include pictures in the project's Trash.** Off by default. This also covers pictures Flow
+  still lists that nothing in the project points to any more, which look deleted.
+
+The 2K and 1080p copies Flow keeps of pictures you upscaled are never saved as files of their
+own: they're copies of grid pictures you already get. **Include items with no date** adds items whose creation time can't be read.
 
 ### Upscaling settings
 

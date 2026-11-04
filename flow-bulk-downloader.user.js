@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.16
+// @version      0.3.17
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.16';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.17';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -214,7 +214,7 @@
     return null;
   }
 
-  /** Shape A ("asset entry"): [assetId, folderId, null, [title, [sec,nanos], isVideo, null, mediaId, operationId, done], projectId] */
+  /** Shape A ("asset entry"): [assetId, folderId, null, [title, [sec,nanos], inTrash, null, mediaId, operationId, done], projectId] */
   function readAssetEntry(n) {
     if (!Array.isArray(n) || n.length < 4 || !isUuid(n[0])) return null;
     const d = n[3];
@@ -229,9 +229,10 @@
       projectId: isUuid(n[n.length - 1]) ? n[n.length - 1] : null,
       title: typeof d[0] === 'string' ? d[0] : '',
       createdMs: created,
-      // Older notes read d[2] as "is video"; live (2026-10) it is true on some plain pictures, so
-      // extractItems() lets the generation record's kind win and keeps this only as a fallback.
-      kind: d[2] === true ? 'video' : (d[2] === false ? 'image' : null),
+      // Older notes read d[2] as "is video". Live (2026-11) it is true exactly on the pictures in the
+      // project's Trash (405 of 405 on a 7,510-entry project, none outside it); the record gives the kind.
+      kind: null,
+      trashed: d[2] === true,
       done: d[6],
       gridMs: tsPairMs(d[6]), // the project grid is sorted newest first by this
       urls: splitUrls(collectUrls(n)),
@@ -250,6 +251,12 @@
     const videoArm = n.length >= 8 && n[7] != null;
     const status = details[8] && Array.isArray(details[8]) ? details[8][0] : null;
     const size = typeof details[13] === 'number' ? details[13] : null;
+    // details[6] = [?, videoSettings, prompt, [[[null, type, mediaId], ...]], ?]: the pictures this one
+    // was made from. Type 1 = an ingredient (reference), 2 = the picture it was edited from, null = the
+    // picture it is an upscaled copy of (live, 2026-11).
+    const gen = Array.isArray(details[6]) ? details[6] : null;
+    const inputs = gen && Array.isArray(gen[3]) && Array.isArray(gen[3][0])
+      ? gen[3][0].filter((x) => Array.isArray(x) && isUuid(x[2])).map((x) => ({ type: x[1] == null ? null : x[1], mediaId: x[2] })) : [];
     return {
       mediaId: n[0],
       altId: n[2],
@@ -261,6 +268,8 @@
       sizeBytes: size,
       model: detectModel(n),
       hasRecord: true,
+      hasPrompt: !!(gen && gen[2]),
+      inputs,
       urls,
     };
   }
@@ -319,6 +328,40 @@
       if (!entries.length) it.inGrid = true;
       else if (!it.inGrid) { it.inGrid = false; stats.notInGrid++; }
     }
+    // What each item with no grid entry is (live 2026-11, 3,120 of them on a 10,630-record project):
+    // 'upscale' a copy Flow keeps of an upscaled picture or video (no prompt, made from one picture),
+    // 'edit' an earlier version of an edited picture (Flow stacks those under the newest version's tile),
+    // 'reference' a picture used as an ingredient in a prompt, 'other' anything else, which we treat as
+    // deleted. Earlier versions of a picture that is now in the Trash count as in the Trash too.
+    const editedInto = new Map(), usedAsRef = new Set();
+    for (const it of items) for (const x of it.inputs || []) {
+      if (x.type === 2) { if (!editedInto.has(x.mediaId)) editedInto.set(x.mediaId, []); editedInto.get(x.mediaId).push(it); }
+      else if (x.type === 1) usedAsRef.add(x.mediaId);
+    }
+    const editEnd = (id, seen) => { // 'live', 'trash' or null: where the edits made from this picture ended up
+      if (seen.has(id)) return null;
+      seen.add(id);
+      let end = null;
+      for (const k of editedInto.get(id) || []) {
+        const e = k.inGrid ? (k.trashed ? 'trash' : 'live') : editEnd(k.mediaId, seen);
+        if (e === 'live') return e;
+        end = end || e;
+      }
+      return end;
+    };
+    stats.hidden = {};
+    for (const it of items) {
+      if (it.inGrid) continue;
+      const ins = it.inputs || [];
+      let h;
+      if ((it.hasRecord && !it.hasPrompt && ins.length === 1 && ins[0].type == null) || /upsampler/i.test(it.model || '')) h = 'upscale';
+      else if (editedInto.has(it.mediaId)) { const e = editEnd(it.mediaId, new Set()); h = e ? 'edit' : 'other'; if (e === 'trash') it.trashed = true; }
+      else if (usedAsRef.has(it.mediaId)) h = 'reference';
+      else h = 'other';
+      it.hidden = h;
+      stats.hidden[h] = (stats.hidden[h] || 0) + 1;
+    }
+    stats.trashed = items.filter((i) => i.trashed).length;
     for (const it of items) {
       if (!it.kind) it.kind = kindFromUrls(it.urls.content) || 'unknown';
       if (!it.title) it.title = '';
@@ -465,7 +508,7 @@
    *  verified on a 5,500-tile project, 2026-10). Returns mediaId -> position in that order. */
   function gridRanks(items, projectId) {
     const pid = projectId ? projectId.toLowerCase() : null;
-    const list = items.filter((i) => i.inGrid !== false && (!pid || !i.projectId || i.projectId.toLowerCase() === pid));
+    const list = items.filter((i) => !offGrid(i) && (!pid || !i.projectId || i.projectId.toLowerCase() === pid));
     const key = (i) => (i.gridMs != null ? i.gridMs : (i.createdMs || 0));
     list.sort((a, b) => key(b) - key(a));
     return new Map(list.map((i, n) => [i.mediaId, n]));
@@ -474,9 +517,11 @@
   function wantsUpscale(kind, settings) {
     return kind === 'video' ? settings.videoQuality === 'upscaled' : kind === 'image' && settings.quality === 'upscaled';
   }
+  /** Not drawn in the project grid: no grid entry (an earlier version of an edit, a reference image), or in the Trash. */
+  function offGrid(it) { return it.inGrid === false || !!it.trashed; }
   /** Whether this item gets upscaled. Flow's upscale sizes live in the tile menu, so an item Flow
-   *  doesn't show in the project grid (a reference image used in a prompt) is saved at original quality. */
-  function upscalable(it, settings) { return wantsUpscale(it.kind, settings) && it.inGrid !== false; }
+   *  doesn't show in the project grid is saved at original quality. */
+  function upscalable(it, settings) { return wantsUpscale(it.kind, settings) && !offGrid(it); }
   /** An uploaded picture: its title is the file name it was uploaded with (e.g. "<hash>.jpg"), where a
    *  generated one's is the prompt. Flow's menu offers no upscaled sizes for these, so a saved original counts. */
   function isUploadedFile(it) { return /^[^\n/\\]{1,120}\.(jpe?g|png|webp|gif|heic|heif|avif|bmp|tiff?)$/i.test(it.title || ''); }
@@ -552,8 +597,8 @@
     if (anyUpscale(settings)) {
       const how = (kind, size) => (wantsUpscale(kind, settings) ? `would be upscaled to ${size}` : 'saved at original quality');
       // items Flow's grid doesn't show can't be upscaled (see upscalable)
-      const hidden = items.filter((i) => i.inGrid === false && wantsUpscale(i.kind, settings)).length;
-      const hp = items.filter((i) => i.inGrid === false && i.kind === 'image' && wantsUpscale(i.kind, settings)).length, hv = hidden - hp;
+      const hidden = items.filter((i) => offGrid(i) && wantsUpscale(i.kind, settings)).length;
+      const hp = items.filter((i) => offGrid(i) && i.kind === 'image' && wantsUpscale(i.kind, settings)).length, hv = hidden - hp;
       return [pics - hp ? `${n(pics - hp, 'picture')} ${how('image', settings.imageUpscale)}` : '', vids - hv ? `${n(vids - hv, 'video')} ${how('video', settings.videoUpscale)}` : '',
         hidden ? `${n(hidden, hv ? 'item' : 'picture')} not in the grid saved at original quality` : ''].filter(Boolean).join(', ');
     }
@@ -590,8 +635,8 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
-    groupDeferred, markKey, markState,
+    gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, offGrid, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
+    groupDeferred, markKey, markState, filterItems,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -607,7 +652,7 @@
   const DEFAULT_SETTINGS = {
     // what
     sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true,
-    keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeNotInGrid: false,
+    keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeEditVersions: false, includeReferences: false, includeTrash: false,
     // quality
     quality: 'original', imageUpscale: '2K', videoQuality: 'original', videoUpscale: '1080p', upscaleLabel: 'Upscal', fallbackOriginal: false, upscaleTimeoutSec: 120,
     upscalePauseSec: 8, maxUpscalesPerRun: 0, dailyUpscaleCap: 0, onLimit: 'stop', limitPauseHours: 24,
@@ -630,7 +675,13 @@
     const s = String(size || '').replace(/\s+/g, '').toLowerCase();
     return !s || s === '2k' || s === '1080p' ? `${mediaId}|up` : `${mediaId}|up:${s}`;
   }
-  function loadSettings() { return Object.assign({}, DEFAULT_SETTINGS, store.get('fbd.settings', {})); }
+  function loadSettings() {
+    const saved = store.get('fbd.settings', {}), s = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // 0.3.17 split "Include pictures not shown in the project grid" into earlier edit versions and references
+    if (saved.includeNotInGrid && saved.includeEditVersions == null) { s.includeEditVersions = true; s.includeReferences = true; }
+    delete s.includeNotInGrid;
+    return s;
+  }
   function saveSettings(s) { store.set('fbd.settings', s); }
   function loadDone() { return store.get('fbd.done', {}); }
   function saveDone(d) { store.set('fbd.done', d); }
@@ -1063,7 +1114,7 @@
   async function jumpToTile(item, sc) {
     const g = gridIndexFor(currentProjectId());
     const target = g && g.ranks.get(item.mediaId);
-    if (target == null) return { tile: null, absent: !!(g && g.ranks.size && item.inGrid === false) };
+    if (target == null) return { tile: null, absent: !!(g && g.ranks.size && offGrid(item)) };
     let bracketed = 0;
     for (let step = 0; step < 12 && !stopFlag; step++) {
       const tile = findTileNow(item);
@@ -1384,15 +1435,18 @@
     opts = opts || {};
     const since = opts.ignoreDates ? null : localInputToMs(settings.sinceLocal);
     const until = opts.ignoreDates ? null : localInputToMs(settings.untilLocal);
-    const done = loadDone();
+    const done = settings.skipDone && !opts.ignoreDone ? loadDone() : null;
     const inc = compileTerms(settings.keywordInclude), exc = compileTerms(settings.keywordExclude);
     const modelRe = settings.modelFilter ? new RegExp(escapeRe(settings.modelFilter), 'i') : null;
-    const out = { keep: [], skippedDone: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0, skippedNotInGrid: 0 };
+    const out = { keep: [], skippedDone: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0, skippedEdits: 0, skippedRefs: 0, skippedTrash: 0, skippedCopies: 0 };
     for (const it of items) {
       const kind = it.kind || 'unknown';
       const wantKind = (kind === 'image' && settings.images) || (kind === 'video' && settings.videos) || (kind === 'unknown' && (settings.images || settings.videos));
       if (!wantKind) { out.skippedType++; continue; }
-      if (!settings.includeNotInGrid && it.inGrid === false) { out.skippedNotInGrid++; continue; }
+      if (it.hidden === 'upscale') { out.skippedCopies++; continue; } // a copy of a picture that is in the grid
+      if (it.trashed || it.hidden === 'other') { if (!settings.includeTrash) { out.skippedTrash++; continue; } }
+      else if (it.hidden === 'edit' && !settings.includeEditVersions) { out.skippedEdits++; continue; }
+      else if (it.hidden === 'reference' && !settings.includeReferences) { out.skippedRefs++; continue; }
       if (settings.excludeUploads && !it.hasRecord) { out.skippedUpload++; continue; }
       if (!matchesKeywords(it.title, inc, exc)) { out.skippedKeyword++; continue; }
       if (modelRe && !modelRe.test(it.model || '')) { out.skippedModel++; continue; }
@@ -1418,7 +1472,10 @@
     if (f.skippedKeyword) parts.push(`${f.skippedKeyword} keyword`);
     if (f.skippedModel) parts.push(`${f.skippedModel} model`);
     if (f.skippedUpload) parts.push(`${f.skippedUpload} uploads`);
-    if (f.skippedNotInGrid) parts.push(`${f.skippedNotInGrid} not shown in the project grid`);
+    if (f.skippedEdits) parts.push(`${f.skippedEdits} earlier versions of edits`);
+    if (f.skippedRefs) parts.push(`${f.skippedRefs} reference images`);
+    if (f.skippedTrash) parts.push(`${f.skippedTrash} in the Trash`);
+    if (f.skippedCopies) parts.push(`${f.skippedCopies} upscaled copies Flow keeps`);
     return parts.join(', ');
   }
 
@@ -1433,7 +1490,7 @@
       const r = await listProjectMedia(pid, settings, log);
       const dates = r.items.map((i) => i.createdMs).filter((x) => x != null);
       const range = dates.length ? `${fmtHuman(Math.min(...dates))} → ${fmtHuman(Math.max(...dates))}` : 'no dates found';
-      log(`  ${r.items.length} items via ${r.source || 'n/a'} (${r.items.filter((i) => i.kind === 'image').length} images, ${r.items.filter((i) => i.kind === 'video').length} videos${r.stats && r.stats.notInGrid ? `, ${r.stats.notInGrid} not in the grid` : ''}); dates ${range}`);
+      log(`  ${r.items.length} items via ${r.source || 'n/a'} (${r.items.filter((i) => i.kind === 'image').length} images, ${r.items.filter((i) => i.kind === 'video').length} videos${r.stats && r.stats.trashed ? `, ${r.stats.trashed} in the Trash` : ''}${r.stats && r.stats.notInGrid ? `, ${r.stats.notInGrid} not in the grid` : ''}); dates ${range}`);
       perProject.push({ projectId: pid, count: r.items.length, source: r.source, stats: r.stats, rawSample: r.raw });
       all.push(...r.items);
       await sleep(settings.delayMs);
@@ -2005,7 +2062,9 @@
               </div>
               <div class="row grid">
                 <label><input type="checkbox" id="excludeUploads"> Leave out my uploaded reference images (experimental)</label>
-                <label><input type="checkbox" id="includeNotInGrid"> Include pictures not shown in the project grid (e.g. reference images used in prompts; always saved at original quality)</label>
+                <label><input type="checkbox" id="includeEditVersions"> Include earlier versions of edited pictures (stacked under the newest one in the grid; saved at original quality)</label>
+                <label><input type="checkbox" id="includeReferences"> Include reference images used in prompts that aren't in the grid (saved at original quality)</label>
+                <label><input type="checkbox" id="includeTrash"> Include pictures in the project's Trash, and deleted ones Flow still lists (saved at original quality)</label>
               </div>
             </details>
 
@@ -2182,7 +2241,7 @@
 
     const FIELDS = {
       sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone',
-      keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeNotInGrid: 'includeNotInGrid',
+      keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeEditVersions: 'includeEditVersions', includeReferences: 'includeReferences', includeTrash: 'includeTrash',
       imageUpscale: 'imageUpscale', videoUpscale: 'videoUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
       extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',
@@ -2284,7 +2343,9 @@
       if (settings.keywordExclude) f.push(`not "${settings.keywordExclude}"`);
       if (settings.modelFilter) f.push(`model "${settings.modelFilter}"`);
       if (settings.excludeUploads) f.push('no uploads');
-      if (settings.includeNotInGrid) f.push('hidden pictures included');
+      if (settings.includeEditVersions) f.push('earlier edit versions');
+      if (settings.includeReferences) f.push('reference images');
+      if (settings.includeTrash) f.push('Trash included');
       $('sumFilters').textContent = f.join(' · ') || 'none';
       $('sumUpscale').textContent = `${settings.imageUpscale || '2K'} pictures, ${settings.videoUpscale || '1080p'} videos, ${settings.upscalePauseSec || 0} s apart` +
         (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day`
@@ -2336,7 +2397,7 @@
         const src = thumbUrl(i);
         if (src) { const img = mk('img'); img.loading = 'lazy'; img.alt = ''; img.onerror = () => img.replaceWith(mk('span', 'noimg')); img.src = src; row.append(img); } else row.append(mk('span', 'noimg'));
         const txt = mk('span', '', `${fmtHuman(i.createdMs)} · ${i.kind}${i.model ? ' · ' + i.model : ''} · ${i.title || '(untitled)'} `);
-        txt.append(mk('span', 'muted', `${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}${i.inGrid === false ? ' · not in the grid' : ''}`));
+        txt.append(mk('span', 'muted', `${i.mediaId.slice(0, 8)}${i.createdSource === 'guess' ? ' · date≈' : ''}${i.trashed || i.hidden === 'other' ? ' · in the Trash' : i.hidden === 'edit' ? ' · earlier version' : i.hidden === 'reference' ? ' · reference' : i.inGrid === false ? ' · not in the grid' : ''}`));
         const st = markState(i, settings, done);
         if (st) txt.append(mk('span', st === 'original' ? 'muted' : 'tag', ` · ${TAGS[st]}`));
         row.append(txt);

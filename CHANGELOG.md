@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.17 — 2026-11-03
+
+- **Fix: pictures in the Trash were downloaded.** Flow lists them with the rest, marked as in the Trash, and the script read that mark as "is a video". They're now skipped. **Include pictures in the project's Trash** (Options → Filters, off by default) brings them back.
+- **"Include pictures not shown in the project grid" is now two boxes.** **Include earlier versions of edited pictures** gets the older versions Flow stacks under an edited picture's tile. **Include reference images used in prompts** gets the pictures used as ingredients. If you had the old box ticked, both start ticked.
+- **No more duplicate 2K files.** Most of what the old box added were the 2K and 1080p copies Flow keeps of pictures you upscaled. Those copies are no longer saved as separate files. Pictures nothing in the project points to any more count as deleted and go with the Trash.
+- **Finding tiles is steadier.** Pictures in the Trash are no longer counted when working out where a picture sits in the grid.
+
 ## 0.3.16 — 2026-10-30
 
 - **See what was deferred, and why.** Click **⏭ N deferred** on the progress card (or **See the N deferred and why** once the run ends) to list each deferred picture with its reason: the upscale limit, the per-run budget, its tile not found in the grid, another project, and so on. The log also sums up the reasons at the end of the run. When a limit stops a run, every picture it didn't reach now counts as deferred.

@@ -82,14 +82,15 @@ test('tsPairMs / epochMs handle s, ms, us, ns', () => {
   assert.equal(H.tsPairMs([SEC_A, 1e9]), null, 'nanos must be < 1e9');
 });
 
-test('readAssetEntry reads title, time, kind and media id', () => {
+test('readAssetEntry reads title, time, trash flag and media id', () => {
   const a = H.readAssetEntry(assetEntryImage);
   assert.equal(a.mediaId, U(10));
   assert.equal(a.title, 'Sunset over harbor');
-  assert.equal(a.kind, 'image');
+  assert.equal(a.kind, null, 'the record gives the kind');
+  assert.equal(a.trashed, false);
   assert.equal(a.createdMs, SEC_A * 1000 + 123);
   assert.equal(a.projectId, U(7));
-  assert.equal(H.readAssetEntry(assetEntryVideo).kind, 'video');
+  assert.equal(H.readAssetEntry(assetEntryVideo).trashed, true, 'd[2] true is the Trash flag (live 2026-11), not "is video"');
   assert.equal(H.readAssetEntry(recordVideo), null, 'a record is not an asset entry');
 });
 
@@ -157,10 +158,53 @@ test('extractItems handles the live 2026-10 layout without duplicating items', (
   assert.equal(a.inGrid, true);
   assert.equal(a.hasRecord, true);
   assert.equal(items.find((i) => i.mediaId === U(202)).kind, 'image', 'a true entry flag does not make a picture a video');
+  assert.equal(items.find((i) => i.mediaId === U(202)).trashed, true, 'it means the picture is in the Trash');
+  assert.equal(stats.trashed, 1);
   assert.equal(items.find((i) => i.mediaId === U(204)).kind, 'video');
   const ref = items.find((i) => i.mediaId === U(203));
   assert.equal(ref.inGrid, false);
   assert.equal(stats.notInGrid, 1);
+});
+
+// Live 2026-11: details[6][3][0] lists what a picture was made from as [null, type, mediaId]
+// (1 = ingredient, 2 = edited from, null = upscaled copy of); entry d[2] true = in the Trash.
+test('extractItems sorts items with no grid entry into upscale copies, edit versions, references and deleted', () => {
+  const SEC = 1787767332;
+  const entry = (media, title, trash = null) => [U(900 + parseInt(media, 10) % 100), null, null, [title, [SEC, 0], trash, null, media, null, [SEC + 20, 0]], U(7)];
+  const rec = (media, prompt, inputs) => [media, U(7), U(800 + parseInt(media, 10) % 100), null, null,
+    [[SEC, 0], null, null, null, null, 'https://lh3.googleusercontent.com/asb/T', [null, null, prompt, [inputs.map(([t, id]) => [null, t, id])], 1], null, null, 1, 'https://lh3.googleusercontent.com/asb/T', null, null, 974606]];
+  const payload = [null,
+    [entry(U(1), 'edited picture'), entry(U(2), 'plain picture'), entry(U(3), 'binned edit', true)],
+    [rec(U(1), 'make it blue', [[2, U(11)], [1, U(12)]]), rec(U(2), 'a cat', []), rec(U(3), 'make it red', [[2, U(13)]]),
+      rec(U(11), 'first try', [[2, U(14)]]), rec(U(14), 'very first try', []), // a two-step edit chain under picture 1
+      rec(U(12), null, []), // used as an ingredient
+      rec(U(13), 'old', []), // earlier version of a picture now in the Trash
+      rec(U(15), null, [[null, U(2)]]), // Flow's stored upscale of picture 2
+      rec(U(16), 'gone', [])]]; // nothing points to it
+  const { items, stats } = H.extractItems(payload);
+  const by = (n) => items.find((i) => i.mediaId === U(n));
+  assert.equal(by(11).hidden, 'edit');
+  assert.equal(by(14).hidden, 'edit', 'follows the chain to the picture in the grid');
+  assert.equal(by(12).hidden, 'reference');
+  assert.equal(by(15).hidden, 'upscale');
+  assert.equal(by(16).hidden, 'other');
+  assert.equal(by(13).hidden, 'edit');
+  assert.equal(by(13).trashed, true, 'an earlier version of a binned picture is binned too');
+  assert.equal(by(3).trashed, true);
+  assert.equal(by(1).hidden, undefined);
+  assert.deepEqual(stats.hidden, { edit: 3, reference: 1, upscale: 1, other: 1 });
+  assert.equal(H.offGrid(by(3)), true, 'a binned picture is not drawn in the grid');
+  assert.equal(H.gridRanks(items, U(7)).has(U(3)), false);
+
+  const base = { images: true, videos: true, includeUndated: true, skipDone: false, quality: 'original', videoQuality: 'original' };
+  const kept = (extra) => H.filterItems(items, Object.assign({}, base, extra)).keep.map((i) => i.mediaId).sort();
+  assert.deepEqual(kept({}), [U(1), U(2)]);
+  assert.deepEqual(kept({ includeEditVersions: true }), [U(1), U(11), U(14), U(2)].sort());
+  assert.deepEqual(kept({ includeReferences: true }), [U(1), U(12), U(2)].sort());
+  assert.deepEqual(kept({ includeTrash: true }), [U(1), U(13), U(16), U(2), U(3)].sort());
+  const f = H.filterItems(items, base);
+  assert.deepEqual([f.skippedEdits, f.skippedRefs, f.skippedTrash, f.skippedCopies], [2, 1, 3, 1]);
+  assert.equal(H.filterItems(items, Object.assign({}, base, { includeEditVersions: true, includeReferences: true, includeTrash: true })).keep.some((i) => i.mediaId === U(15)), false, 'stored upscale copies never come down as files of their own');
 });
 
 test('guessCreatedMs prefers [sec,nanos] pairs and ignores pre-2025 noise and byte sizes', () => {

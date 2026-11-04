@@ -99,6 +99,11 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
     d[8] = [3]; d[10] = `https://lh3.googleusercontent.com/asb/${tokenOf(i)}`; d[13] = 123456;
     return Object.assign(d, extra || {});
   }
+  // what picture i was made from: 0 used the reference image, 1 is an edit of an earlier version
+  function gen(i) {
+    const inputs = i === 0 ? [[null, 1, U(150)]] : i === 1 ? [[null, 2, U(151)]] : [];
+    return [null, [[i % 2 ? 'NARWHAL' : 'GEM_PIX_2']], `Prompt ${i}`, [inputs], 1];
+  }
   function listing(projectRef) {
     const pid = projectRef.replace('projects/', '');
     const entries = [], records = [];
@@ -106,12 +111,18 @@ Upscale #2 fails with a toast and every upscale after the 3rd successful one hit
       const created = now - i * 2 * DAY;
       const isVideo = isVideoAt(i);
       const mediaId = U(100 + i), wf = U(200 + i);
-      entries.push([U(300 + i), U(99), null, [`Prompt ${i} ${i % 3 === 0 ? 'cat' : 'landscape'} for ${pid.slice(0, 4)}`, [Math.floor(created / 1000), 0], isVideo, null, mediaId, wf, true], pid]);
+      entries.push([U(300 + i), U(99), null, [`Prompt ${i} ${i % 3 === 0 ? 'cat' : 'landscape'} for ${pid.slice(0, 4)}`, [Math.floor(created / 1000), 0], null, null, mediaId, wf, true], pid]);
       if (isVideo) records.push([wf, pid, mediaId, null, null, details(i), null, [[null,null,null,null,null,null,null,null, 'https://flow-content.google/video/' + wf + '?Expires=1&Signature=s', null,null,null,'abra_r2v_8s']]]);
-      else records.push([wf, pid, mediaId, null, null, details(i, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=1&Signature=s' }), null]);
+      else records.push([wf, pid, mediaId, null, null, details(i, { 5: 'https://flow-content.google/image/' + mediaId + '?Expires=1&Signature=s', 6: gen(i) }), null]);
     }
     // a reference image used in a prompt: generation record only, not in the grid
     records.push([U(250), pid, U(150), null, null, details(50, { 5: 'https://flow-content.google/image/' + U(150) + '?Expires=1&Signature=s', 12: [Math.floor((now - DAY / 2) / 1000), 0] }), null]);
+    // an earlier version of the edited picture 1 (stacked under its tile), and Flow's stored 2K copy of picture 2
+    records.push([U(251), pid, U(151), null, null, details(51, { 5: 'https://flow-content.google/image/' + U(151) + '?Expires=1&Signature=s', 6: [null, null, 'before the edit', [], 1], 12: [Math.floor((now - 3 * DAY) / 1000), 0] }), null]);
+    records.push([U(252), pid, U(152), null, null, details(52, { 5: 'https://flow-content.google/image/' + U(152) + '?Expires=1&Signature=s', 6: [null, null, null, [[[null, null, U(102)]]], 1], 12: [Math.floor((now - 4 * DAY) / 1000), 0] }), null]);
+    // a picture in the project's Trash: its grid entry carries the trash flag
+    entries.push([U(398), U(99), null, ['Prompt binned', [Math.floor((now - 5 * DAY) / 1000), 0], true, null, U(198), U(298), true], pid]);
+    records.push([U(298), pid, U(198), null, null, details(98, { 5: 'https://flow-content.google/image/' + U(198) + '?Expires=1&Signature=s' }), null]);
     // an uploaded reference image: asset entry only, no generation record
     entries.push([U(399), U(99), null, ['my-upload.png', [Math.floor((now - DAY) / 1000), 0], false, null, U(199), null, true], pid]);
     return [entries, records, 'token'];
