@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.18 — 2026-11-05
+
+- **Each project remembers where you got to, separately for each quality.** The Download tab shows, for example, *Last saved in LUNA 2: Original 2026-10-29 00:03 · 2K 2026-10-08 04:01*. Pictures and videos, and Original, 2K and 4K, each have their own date. A Scan works it out from your past runs the first time.
+- **New: Start from last saved** (on by default). Each project picks up from its own date at the chosen quality, so there's no need to retype From. A later From still applies, and a project with no date yet goes by From. A failed, deferred or unticked picture holds the date back so the next run tries it again. Hand marks never move it.
+- **Hand marks are now called out.** Scan says how many "already downloaded" pictures were only marked by hand with no file saved, and points to **Tools → Undo marks in range** when they're why nothing matches.
+- Backups carry the dates, and **Clear history** clears them.
+
 ## 0.3.17 — 2026-11-03
 
 - **Fix: pictures in the Trash were downloaded.** Flow lists them with the rest, marked as in the Trash, and the script read that mark as "is a video". They're now skipped. **Include pictures in the project's Trash** (Options → Filters, off by default) brings them back.

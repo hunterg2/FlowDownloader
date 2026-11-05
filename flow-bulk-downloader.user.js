@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.17
+// @version      0.3.18
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.17';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.18';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -631,12 +631,71 @@
     return upscalable(it, settings) && done[doneKey(it.mediaId, false)] ? 'original' : '';
   }
 
+  // "Last saved" spots: per project, the newest picture a run really saved with nothing left unsaved
+  // before it, kept per kind and quality ({ [projectId]: { 'image': …, 'image|up': …, 'video|up': … } }).
+  // Hand marks never move a spot, and neither do items outside the grid, which have no place in the order.
+  /** Which spot an item belongs to at the quality a run would save it at. */
+  function spotKey(it, settings) { return (it.kind || 'image') + markKey(it, settings).slice(it.mediaId.length); }
+  function spotFor(spots, it, settings) {
+    const p = spots[String(it.projectId || '').toLowerCase()], s = p && p[spotKey(it, settings)];
+    return s ? s.createdMs : null;
+  }
+  /** Notes an item this run didn't save; the spot stops before it, so the next run tries it again. */
+  function holdSpot(held, it, settings) {
+    if (offGrid(it) || it.createdMs == null || !it.projectId) return;
+    const k = it.projectId.toLowerCase() + spotKey(it, settings), h = held.get(k);
+    if (h == null || it.createdMs < h) held.set(k, it.createdMs);
+  }
+  /** Moves the spot up to a saved item. Returns whether it moved. */
+  function advanceSpot(spots, it, settings, held, at) {
+    if (offGrid(it) || it.createdMs == null || !it.projectId) return false;
+    const pid = it.projectId.toLowerCase(), k = spotKey(it, settings), h = held.get(pid + k);
+    if (h != null && it.createdMs >= h) return false;
+    const p = spots[pid] || (spots[pid] = {});
+    if (p[k] && p[k].createdMs > it.createdMs) return false;
+    p[k] = { createdMs: it.createdMs, at };
+    return true;
+  }
+  /** Items taken out of the history have to be offered again, so the spot moves back to them. */
+  function rewindSpots(spots, items, settings) {
+    for (const it of items) {
+      const p = spots[String(it.projectId || '').toLowerCase()], s = p && p[spotKey(it, settings)];
+      if (s && !offGrid(it) && it.createdMs != null && it.createdMs < s.createdMs) s.createdMs = it.createdMs;
+    }
+  }
+  /** Fills in spots a project doesn't have yet from the newest real save at each quality in the manifest.
+   *  Uploads don't count (2K runs save those at original), nor do entries no longer in the history. */
+  function seedSpots(spots, items, manifest, done) {
+    const byId = new Map(items.map((i) => [i.mediaId, i])), best = new Map();
+    for (const r of manifest) {
+      const it = byId.get(r.mediaId);
+      if (!it || !it.projectId || offGrid(it) || isUploadedFile(it) || it.createdMs == null || !/^saved/.test(r.status || '')) continue;
+      const up = /upscaled/i.test(r.quality || ''), key = doneKey(it.mediaId, up, up && String(r.quality).split(' ')[0]), e = done[key];
+      if (!e || e.manual) continue;
+      const pid = it.projectId.toLowerCase(), k = it.kind + key.slice(it.mediaId.length);
+      if (spots[pid] && spots[pid][k]) continue;
+      const cur = best.get(pid + k);
+      if (!cur || r.savedAt > cur.savedAt) best.set(pid + k, { pid, k, savedAt: r.savedAt, createdMs: it.createdMs });
+    }
+    for (const b of best.values()) (spots[b.pid] || (spots[b.pid] = {}))[b.k] = { createdMs: b.createdMs, at: Date.parse(b.savedAt) || 0 };
+    return best.size > 0;
+  }
+  /** "Original 2026-10-29 00:03 · 2K 2026-10-08 04:01" for a project's spots. */
+  function describeSpots(p, settings) {
+    const label = (k) => {
+      const [kind, q] = k.split('|'), video = kind === 'video';
+      const name = !q ? 'Original' : q === 'up' ? (video ? settings.videoUpscale : settings.imageUpscale) || (video ? '1080p' : '2K') : q.replace(/^up:/, '').toUpperCase();
+      return (video ? 'Video ' : '') + name;
+    };
+    return Object.keys(p || {}).sort().map((k) => `${label(k)} ${fmtHuman(p[k].createdMs)}`).join(' · ');
+  }
+
   const helpers = {
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
     gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, offGrid, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
-    groupDeferred, markKey, markState, filterItems,
+    groupDeferred, markKey, markState, filterItems, spotKey, spotFor, holdSpot, advanceSpot, rewindSpots, seedSpots, describeSpots,
   };
   if (IS_NODE) { module.exports = helpers; return; }
 
@@ -651,7 +710,7 @@
 
   const DEFAULT_SETTINGS = {
     // what
-    sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true,
+    sinceLocal: '', untilLocal: '', images: true, videos: false, includeUndated: false, skipDone: true, fromLastSaved: true,
     keywordInclude: '', keywordExclude: '', modelFilter: '', excludeUploads: false, includeEditVersions: false, includeReferences: false, includeTrash: false,
     // quality
     quality: 'original', imageUpscale: '2K', videoQuality: 'original', videoUpscale: '1080p', upscaleLabel: 'Upscal', fallbackOriginal: false, upscaleTimeoutSec: 120,
@@ -685,6 +744,8 @@
   function saveSettings(s) { store.set('fbd.settings', s); }
   function loadDone() { return store.get('fbd.done', {}); }
   function saveDone(d) { store.set('fbd.done', d); }
+  function loadSpots() { return store.get('fbd.spots', {}); }
+  function saveSpots(s) { store.set('fbd.spots', s); }
   function loadProjects() { return store.get('fbd.projects', {}); }
   function saveProjects(p) { store.set('fbd.projects', p); }
   function loadManifest() { return store.get('fbd.manifest', []); }
@@ -1435,10 +1496,11 @@
     opts = opts || {};
     const since = opts.ignoreDates ? null : localInputToMs(settings.sinceLocal);
     const until = opts.ignoreDates ? null : localInputToMs(settings.untilLocal);
-    const done = settings.skipDone && !opts.ignoreDone ? loadDone() : null;
+    const done = opts.done || (settings.skipDone && !opts.ignoreDone ? loadDone() : null);
+    const spots = opts.spots || (settings.fromLastSaved && !opts.ignoreDone ? loadSpots() : null);
     const inc = compileTerms(settings.keywordInclude), exc = compileTerms(settings.keywordExclude);
     const modelRe = settings.modelFilter ? new RegExp(escapeRe(settings.modelFilter), 'i') : null;
-    const out = { keep: [], skippedDone: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0, skippedEdits: 0, skippedRefs: 0, skippedTrash: 0, skippedCopies: 0 };
+    const out = { keep: [], skippedDone: 0, skippedMarked: 0, skippedBehind: 0, skippedType: 0, skippedDate: 0, skippedUndated: 0, skippedKeyword: 0, skippedModel: 0, skippedUpload: 0, skippedEdits: 0, skippedRefs: 0, skippedTrash: 0, skippedCopies: 0 };
     for (const it of items) {
       const kind = it.kind || 'unknown';
       const wantKind = (kind === 'image' && settings.images) || (kind === 'video' && settings.videos) || (kind === 'unknown' && (settings.images || settings.videos));
@@ -1459,7 +1521,12 @@
       if (settings.skipDone && !opts.ignoreDone) {
         const wantUp = upscalable(it, settings);
         const orig = done[doneKey(it.mediaId, false)];
-        if (done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))] || (wantUp && orig && (orig.noUpscale || isUploadedFile(it)))) { out.skippedDone++; continue; }
+        const saved = done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))];
+        if (saved || (wantUp && orig && (orig.noUpscale || isUploadedFile(it)))) { out.skippedDone++; if (saved && saved.manual) out.skippedMarked++; continue; }
+      }
+      if (spots && !offGrid(it) && it.createdMs != null) {
+        const spot = spotFor(spots, it, settings);
+        if (spot != null && it.createdMs < spot) { out.skippedBehind++; continue; }
       }
       out.keep.push(it);
     }
@@ -1468,7 +1535,8 @@
   }
   function skipSummaryShort(f) { return 'skipped ' + (skipSummary(f).split(', ').filter((x) => !/^0 /.test(x)).join(', ') || 'nothing'); }
   function skipSummary(f) {
-    const parts = [`${f.skippedDone} already downloaded`, `${f.skippedDate} outside date range`, `${f.skippedType} wrong type`, `${f.skippedUndated} undated`];
+    const parts = [`${f.skippedDone} already downloaded${f.skippedMarked ? ` (${f.skippedMarked} only marked by hand, no file saved)` : ''}`, `${f.skippedDate} outside date range`, `${f.skippedType} wrong type`, `${f.skippedUndated} undated`];
+    if (f.skippedBehind) parts.push(`${f.skippedBehind} older than the last saved one`);
     if (f.skippedKeyword) parts.push(`${f.skippedKeyword} keyword`);
     if (f.skippedModel) parts.push(`${f.skippedModel} model`);
     if (f.skippedUpload) parts.push(`${f.skippedUpload} uploads`);
@@ -1495,6 +1563,8 @@
       all.push(...r.items);
       await sleep(settings.delayMs);
     }
+    const spots = loadSpots();
+    if (seedSpots(spots, all, loadManifest(), loadDone())) saveSpots(spots);
     lastScan = { items: all, perProject, at: Date.now() };
     return lastScan;
   }
@@ -1547,7 +1617,9 @@
       const s = await scan(settings, log);
       const f = filterItems(s.items, settings);
       let keep = f.keep;
+      const spots = loadSpots(), held = new Map();
       if (opts.exclude && opts.exclude.size) {
+        for (const it of keep) if (opts.exclude.has(it.mediaId)) holdSpot(held, it, settings);
         const n0 = keep.length;
         keep = keep.filter((i) => !opts.exclude.has(i.mediaId));
         if (keep.length < n0) log(`Leaving out ${n0 - keep.length} item(s) you unticked in the list.`);
@@ -1579,7 +1651,7 @@
       let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0;
       // Each deferred item and why, so clicking "deferred" on the card can list them.
       const deferredList = [];
-      const defer = (it, reason) => { deferred++; deferredList.push({ it, reason }); };
+      const defer = (it, reason) => { deferred++; deferredList.push({ it, reason }); holdSpot(held, it, settings); };
       const deferRest = (from, reason) => { for (let j = from; j < keep.length; j++) defer(keep[j], reason); };
       ui.setDeferred(deferredList);
       const pausedText = () => { const at = store.get('fbd.upscaleLimitAt', 0); return at ? `upscaling is paused until ${fmtHuman(at + limitPauseMs)}` : 'upscaling is paused'; };
@@ -1665,6 +1737,9 @@
           ok++; failStreak = 0;
           done[doneKey(it.mediaId, !!r.upscaled, r.size)] = { name: r.path || r.name, at: Date.now(), project: it.projectId, bytes: r.bytes, upscaled: !!r.upscaled, quality: r.qualityLabel || (r.upscaled ? 'upscaled' : 'original'), upscaleFailed, noUpscale };
           saveDone(done);
+          // Only a save at the quality this run was after moves the spot; an original saved instead of a 2K holds it.
+          if (!noUpscale && doneKey(it.mediaId, !!r.upscaled, r.size) !== markKey(it, settings)) holdSpot(held, it, settings);
+          else if (!opts.limit && advanceSpot(spots, it, settings, held, Date.now())) saveSpots(spots);
           rows.push({
             savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '',
             created: it.createdMs != null ? new Date(it.createdMs).toISOString() : '', kind: it.kind, model: it.model || '', quality: r.qualityLabel,
@@ -1673,6 +1748,7 @@
           log(`✔ ${r.path || r.name}${r.flowNamed ? '' : ` (${(r.bytes / 1024).toFixed(0)} KB${r.viaPoster ? ', preview quality' : ''}${r.upscaled ? ', upscaled' : ''})`}`);
         } catch (e) {
           fail++; failStreak++;
+          holdSpot(held, it, settings);
           log(`✘ ${it.mediaId.slice(0, 8)} ${fmtHuman(it.createdMs)}: ${e.message}`);
           rows.push({ savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '', created: it.createdMs != null ? new Date(it.createdMs).toISOString() : '', kind: it.kind, model: it.model || '', quality: '', file: '', bytes: '', status: 'failed: ' + e.message, flowSizeBytes: it.sizeBytes || '' });
           if (failStreak >= 6) { log('6 failures in a row — stopping this run so Flow is not hammered. Check the log / Diagnose, then run again.'); break; }
@@ -1738,6 +1814,9 @@
     let n = 0;
     for (const it of items) { const k = markKey(it, settings); if (done[k]) { delete done[k]; n++; } }
     saveDone(done);
+    const spots = loadSpots();
+    rewindSpots(spots, items, settings);
+    saveSpots(spots);
     return n;
   }
   /** Removes the "marked as done manually" entries at the chosen quality for items in From/To.
@@ -1745,20 +1824,22 @@
   async function unmarkManual(settings, log) {
     const s = await scan(settings, log);
     const f = filterItems(s.items, settings, { ignoreDone: true });
-    const done = loadDone();
-    let n = 0;
+    const done = loadDone(), freed = [];
     for (const it of f.keep) {
       const k = markKey(it, settings);
-      if (done[k] && done[k].manual) { delete done[k]; n++; }
+      if (done[k] && done[k].manual) { delete done[k]; freed.push(it); }
     }
     saveDone(done);
+    const spots = loadSpots(), n = freed.length;
+    rewindSpots(spots, freed, settings);
+    saveSpots(spots);
     log(`Removed ${n} hand mark(s) ${rangeText(settings)}. Those items will be offered again; files the script saved are still counted.`);
   }
 
   function buildBackup(settings) {
     return {
       app: 'flow-bulk-downloader', version: VERSION, exportedAt: new Date().toISOString(),
-      settings, done: loadDone(), projects: loadProjects(), upscaleLog: loadUpscaleLog(), manifest: loadManifest(), learned: loadLearned(),
+      settings, done: loadDone(), spots: loadSpots(), projects: loadProjects(), upscaleLog: loadUpscaleLog(), manifest: loadManifest(), learned: loadLearned(),
       lastRun: store.get('fbd.lastRun', null), upscaleLimitAt: store.get('fbd.upscaleLimitAt', 0), flowLimits: store.get('fbd.flowLimits', []),
     };
   }
@@ -1766,6 +1847,7 @@
     if (!b || b.app !== 'flow-bulk-downloader') throw new Error('not a Flow Bulk Downloader backup file');
     if (b.settings) saveSettings(Object.assign({}, DEFAULT_SETTINGS, b.settings));
     if (b.done) saveDone(Object.assign({}, loadDone(), b.done));
+    if (b.spots) saveSpots(Object.assign({}, b.spots, loadSpots()));
     if (b.projects) saveProjects(Object.assign({}, loadProjects(), b.projects));
     if (Array.isArray(b.upscaleLog)) saveUpscaleLog(uniq(loadUpscaleLog().concat(b.upscaleLog)));
     if (Array.isArray(b.manifest)) { const seen = new Set(loadManifest().map((r) => r.savedAt + '|' + r.mediaId + '|' + r.quality)); const m = loadManifest(); for (const r of b.manifest) { const k = r.savedAt + '|' + r.mediaId + '|' + r.quality; if (!seen.has(k)) { m.push(r); seen.add(k); } } m.sort((a, c) => String(a.savedAt).localeCompare(String(c.savedAt))); saveManifest(m); }
@@ -2011,6 +2093,11 @@
               <span class="lbl">To</span><input type="datetime-local" id="until"><span class="muted">empty = up to now</span>
             </div>
             <div class="field">
+              <span class="lbl"></span>
+              <label title="Each project picks up after the last picture really saved at the chosen quality. A From later than that still applies. Projects with no last saved picture yet go by From."><input type="checkbox" id="fromLastSaved"> Start from last saved</label>
+            </div>
+            <div class="hint" id="spotLine" style="white-space:pre-line" hidden></div>
+            <div class="field">
               <span class="lbl">Get</span>
               <label><input type="checkbox" id="images"> Pictures</label>
               <label><input type="checkbox" id="videos"> Videos</label>
@@ -2240,7 +2327,7 @@
     logBox.addEventListener('toggle', () => { if (logBox.open) { unseenLog = 0; $('logBadge').hidden = true; logEl.scrollTop = logEl.scrollHeight; } });
 
     const FIELDS = {
-      sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone',
+      sinceLocal: 'since', untilLocal: 'until', images: 'images', videos: 'videos', includeUndated: 'undated', skipDone: 'skipDone', fromLastSaved: 'fromLastSaved',
       keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeEditVersions: 'includeEditVersions', includeReferences: 'includeReferences', includeTrash: 'includeTrash',
       imageUpscale: 'imageUpscale', videoUpscale: 'videoUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
@@ -2327,6 +2414,9 @@
       renderSummaries();
     }
     function renderSummaries() {
+      const spots = loadSpots(), ids = targetProjectIds(settings);
+      $('spotLine').textContent = ids.slice(0, 5).map((id) => `Last saved in ${projectTitleFor(id) || id.slice(0, 8)}: ${describeSpots(spots[id], settings) || 'nothing yet (Scan looks it up from past runs)'}`).join('\n');
+      $('spotLine').hidden = !ids.length;
       $('qUpLabel').textContent = `Upscaled ${settings.imageUpscale || '2K'}`;
       $('vqUpLabel').textContent = `Upscaled ${settings.videoUpscale || '1080p'}`;
       $('qPicRow').hidden = !settings.images;
@@ -2718,7 +2808,7 @@
         let est = '';
         if (f.keep.length) { const { lim, plan } = planFor(f.keep, settings); const t = describePlan(plan, settings, lim); est = '\n' + t; log(t); }
         setBar(null);
-        finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}.${est}\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}`);
+        finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}.${est}\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}${f.skippedBehind && settings.skipDone ? '\nUntick Start from last saved to get the older ones.' : ''}${f.skippedMarked && !f.keep.length ? '\nHand marks hold pictures back: Tools → Undo marks in range takes them away.' : ''}`);
         excluded.clear(); lastPick = -1;
         renderItems(f.keep, true);
         $('itemsBox').open = f.keep.length > 0;
@@ -2785,7 +2875,7 @@
     });
     $('clear').addEventListener('click', () => {
       if (!confirm('Forget the list of already-downloaded files? Files on disk are not touched.')) return;
-      saveDone({}); renderStatus(); log('Download history cleared.');
+      saveDone({}); saveSpots({}); renderStatus(); log('Download history cleared.');
     });
 
     // Auto-check timer

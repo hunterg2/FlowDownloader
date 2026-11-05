@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.17**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.18**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -84,7 +84,8 @@ This is the quick way. It saves the files exactly as Flow stores them, usually a
 
 1. Open the **project** you want in Flow and click **⬇ Flow Export**.
 2. On the **Download** tab, set **From** to the date and time to start from. Leave **To** empty
-   to go up to now.
+   to go up to now. After your first run you can leave From alone: with **Start from last saved**
+   ticked, each project picks up where the last run got to at the chosen quality.
 3. Tick **Pictures**, **Videos** or both. Leave **Skip already saved** ticked.
 4. Set the **Pictures** and **Videos** quality switches to **Original**.
 5. Click **Scan**. Nothing is downloaded: it shows how many items match and roughly how long
@@ -233,8 +234,19 @@ If the history is already gone, **Tools → Mark all current as done** records e
 project between **From** and **To** (for the types, filters and quality you've set) as downloaded
 without downloading anything, so runs skip it. Set From and To to the pictures you already have.
 
+**What is "Last saved" under To?**
+The newest picture a run really saved in this project, with nothing left unsaved before it. Original,
+2K and 4K each have their own, and so do videos. **Start from last saved** makes Scan and Download
+begin there. A later **From** still applies. A picture that failed or was deferred holds the date
+back, so the next run tries it again, and hand marks never move it. To reach older pictures, untick
+the box. The Scan summary counts how many it left out.
+
+**Scan finds nothing, but I know pictures are missing.**
+Read the Scan summary. If it says "only marked by hand, no file saved", those pictures were marked
+with **Mark all current as done** and were never downloaded at that quality. See below to undo that.
+
 **I marked too much as done. How do I undo it?**
-For a few pictures: turn off **Skip already saved**, **Scan**, **Untick all**, tick the ones you
+For a few pictures: turn off **Skip already saved** and **Start from last saved**, **Scan**, **Untick all**, tick the ones you
 don't have, and click **Mark ticked as not done**. For a whole stretch: set **From**/**To** and the quality to cover the pictures you don't have, then use
 **Tools → Undo marks in range**. It removes only the marks that button made; pictures the script
 really downloaded stay counted. (Before 0.3.14, Mark all current as done ignored From/To and

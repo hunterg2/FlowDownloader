@@ -442,4 +442,78 @@ test('deferred reasons group and the history marks read per quality', () => {
   assert.equal(H.markState(it, up, { 'm1|up': { name: 'x' }, m1: {} }), 'saved');
 });
 
+test('last saved spots are kept per project and quality and hold before anything left unsaved', () => {
+  const s2k = { images: true, quality: 'upscaled', imageUpscale: '2K', videoUpscale: '1080p' }, s1k = { images: true, quality: 'original', imageUpscale: '2K' };
+  const P = U(7), pic = (n, createdMs, extra) => ({ mediaId: U(n), projectId: P, kind: 'image', inGrid: true, title: 'a prompt', createdMs, ...extra });
+  assert.equal(H.spotKey(pic(1, 1), s2k), 'image|up');
+  assert.equal(H.spotKey(pic(1, 1), s1k), 'image');
+  assert.equal(H.spotKey(pic(1, 1), { ...s2k, imageUpscale: '4K' }), 'image|up:4k');
+  assert.equal(H.spotKey(pic(1, 1, { inGrid: false }), s2k), 'image', 'not upscalable, so it counts as an original');
+
+  const spots = {}, held = new Map();
+  assert.equal(H.advanceSpot(spots, pic(1, 100), s2k, held, 5), true);
+  assert.equal(H.spotFor(spots, pic(9, 1), s2k), 100);
+  assert.equal(H.spotFor(spots, pic(9, 1), s1k), null, '1K and 2K do not share a spot');
+  H.holdSpot(held, pic(2, 200), s2k); // failed or deferred
+  assert.equal(H.advanceSpot(spots, pic(3, 300), s2k, held, 5), false);
+  assert.equal(H.spotFor(spots, pic(9, 1), s2k), 100, 'the next run tries the held picture again');
+  assert.equal(H.advanceSpot(spots, pic(3, 300), s1k, held, 5), true, 'a hold at 2K does not touch 1K');
+  assert.equal(H.advanceSpot(spots, pic(4, 50), s2k, new Map(), 5), false, 'an older save never moves it back');
+  assert.equal(H.advanceSpot(spots, pic(5, 900, { inGrid: false }), s2k, new Map(), 5), false, 'items outside the grid never move it');
+  assert.equal(H.advanceSpot(spots, pic(5, 900, { trashed: true }), s2k, new Map(), 5), false);
+
+  H.rewindSpots(spots, [pic(6, 40)], s2k);
+  assert.equal(H.spotFor(spots, pic(9, 1), s2k), 40, 'taking a picture out of the history moves the spot back to it');
+  assert.equal(H.spotFor(spots, pic(9, 1), s1k), 300);
+  assert.match(H.describeSpots(spots[P], s2k), /^Original .* · 2K /);
+  assert.equal(H.describeSpots(undefined, s2k), '');
+});
+
+test('spots are worked out from the manifest, ignoring hand marks, uploads, copies and failed saves', () => {
+  const P = U(7), pic = (n, createdMs, extra) => ({ mediaId: U(n), projectId: P, kind: 'image', inGrid: true, title: 'a prompt', createdMs, ...extra });
+  const items = [pic(1, 100), pic(2, 500), pic(3, 900), pic(4, 950, { title: 'abc.jpg' }), pic(5, 990, { inGrid: false, hidden: 'upscale' }), pic(6, 995)];
+  const row = (n, savedAt, quality, status) => ({ mediaId: U(n), savedAt, quality, status: status || 'saved' });
+  const manifest = [
+    row(3, '2026-10-23T00:00:00Z', '2K Upscaled'), // an early one-off, newest picture but not the last save
+    row(2, '2026-10-30T00:00:00Z', '2K Upscaled'),
+    row(1, '2026-10-29T00:00:00Z', 'original'),
+    row(4, '2026-10-31T00:00:00Z', 'original'), // an upload saved during a 2K run
+    row(5, '2026-11-04T00:00:00Z', 'original'), // one of Flow's stored copies
+    row(6, '2026-11-05T00:00:00Z', '', 'failed: nope'),
+  ];
+  const done = { [U(1)]: {}, [`${U(2)}|up`]: {}, [`${U(3)}|up`]: {}, [U(4)]: {}, [U(5)]: {} };
+  const spots = {};
+  assert.equal(H.seedSpots(spots, items, manifest, done), true);
+  assert.equal(spots[P]['image|up'].createdMs, 500);
+  assert.equal(spots[P].image.createdMs, 100);
+  spots[P]['image|up'].createdMs = 700;
+  assert.equal(H.seedSpots(spots, items, manifest, done), false, 'a spot it already has stays');
+  assert.equal(spots[P]['image|up'].createdMs, 700);
+  const cleared = {};
+  assert.equal(H.seedSpots(cleared, items, manifest, {}), false, 'history cleared, nothing to work out');
+  const marked = {};
+  H.seedSpots(marked, items, manifest, { [`${U(2)}|up`]: { manual: true } });
+  assert.deepEqual(marked, {}, 'a hand mark is not a save');
+});
+
+test('filterItems starts from the last saved picture and counts hand marks', () => {
+  const P = U(7), pic = (n, createdMs) => ({ mediaId: U(n), projectId: P, kind: 'image', inGrid: true, title: 'a prompt', createdMs, urls: { content: [], poster: [], other: [] } });
+  const base = { images: true, videos: false, quality: 'upscaled', imageUpscale: '2K', skipDone: true, fromLastSaved: true, keywordInclude: '', keywordExclude: '', modelFilter: '' };
+  const items = [pic(1, 100), pic(2, 200), pic(3, 300), pic(4, 400), { ...pic(5, 150), inGrid: false, hidden: 'edit' }];
+  const spots = { [P]: { 'image|up': { createdMs: 200 }, image: { createdMs: 400 } } };
+  const done = { [`${U(1)}|up`]: { name: 'x' }, [`${U(3)}|up`]: { manual: true } };
+  let f = H.filterItems(items, { ...base, includeEditVersions: true }, { spots, done });
+  assert.deepEqual(f.keep.map((i) => i.mediaId), [U(5), U(2), U(4)], 'the spot itself stays in, in case others share its time; edit versions ignore spots');
+  assert.equal(f.skippedDone, 2);
+  assert.equal(f.skippedMarked, 1);
+  f = H.filterItems(items.slice(0, 4), { ...base, skipDone: false }, { spots });
+  assert.equal(f.skippedBehind, 1, 'pic 1 is older than the spot');
+  f = H.filterItems(items.slice(0, 4), { ...base, quality: 'original' }, { spots, done: {} });
+  assert.deepEqual(f.keep.map((i) => i.mediaId), [U(4)], '1K goes by its own spot');
+  f = H.filterItems(items.slice(0, 4), { ...base, sinceLocal: new Date(350).toISOString() }, { spots, done: {} });
+  assert.deepEqual(f.keep.map((i) => i.mediaId), [U(4)], 'a From later than the spot still applies');
+  f = H.filterItems(items.slice(0, 4), { ...base, fromLastSaved: false }, { spots: null, done: {} });
+  assert.equal(f.keep.length, 4, 'with the box off nothing is held back');
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);
