@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.18**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.19**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -154,8 +154,13 @@ Good to know:
 - **Some pictures can't be upscaled**: reference images used in prompts (they aren't in the
   project grid, where Flow's upscale menu is) and uploads whose menu offers only a plain
   Download. These are saved at original quality and count as done, so later 2K runs skip them.
-- Flow doesn't always say clearly that the limit is reached, so **two failed upscales in a
-  row**, or upscale entries greyed out in Flow's menu, also count as the daily limit.
+- Upscale entries greyed out in Flow's menu also count as the daily limit. Flow's **Upscaling
+  failed!** message doesn't: it can be temporary. The script waits and tries that picture again
+  after 1, 5 and 15 minutes. If all four tries fail it stops the run but sets no pause, so
+  **Download** can try again whenever you like.
+- **A recorded limit is checked, not just believed.** While upscaling is paused, pressing
+  **Download** tries one upscale first. If it works, the pause ends and the run carries on.
+  Automatic runs wait the pause out.
 - An item it couldn't reach (for example because the page was busy) is **deferred**:
   nothing is saved, it isn't marked as done, and the next run tries it again. Click
   **⏭ N deferred** on the progress card (or **See the N deferred and why** after the run) to list
@@ -214,8 +219,8 @@ whose menu has no 2K option.
 The log says so for each one, and they count as done. The other reason is **If an upscale
 fails, save the original meanwhile** (Options → Upscaling, off by default): with it ticked, a
 failed upscale saves the original instead. Those pictures aren't marked as done for 2K: the
-next 2K run tries the upscale again, without saving the original a second time. Two failed upscales in a row are
-taken as Flow's daily limit, and then **On the daily limit** decides what happens: **stop the
+next 2K run tries the upscale again, without saving the original a second time. If Flow keeps
+refusing after the retries, **On the daily limit** decides what happens: **stop the
 run** stops straight away, **continue with originals** saves the rest at original quality and
 keeps them queued for 2K.
 
@@ -412,7 +417,7 @@ Under **Options → Upscaling**:
 - **On the daily limit:** stop the run (default) or continue with originals, **and pause
   upscaling for** N hours (default 24). **Reset limit pause** overrides it.
 - **If an upscale fails, save the original meanwhile** (off by default). The item stays queued
-  for upscaling. Two failed upscales in a row count as the daily limit.
+  for upscaling. Flow's "Upscaling failed!" is retried after 1, 5 and 15 minutes before it counts.
 - Three failures in a row pause two minutes; six stop the run.
 
 ### Automation

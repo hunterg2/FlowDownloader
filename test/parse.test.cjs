@@ -516,4 +516,23 @@ test('filterItems starts from the last saved picture and counts hand marks', () 
   assert.equal(f.keep.length, 4, 'with the box off nothing is held back');
 });
 
+test('upscaleFailureStep: "Upscaling failed!" is retried, not taken for the daily limit', () => {
+  const refused = { refused: true }, other = {};
+  assert.deepEqual(H.upscaleFailureStep(refused, 1, false), { step: 'retry', waitMs: 60000 });
+  assert.deepEqual(H.upscaleFailureStep(refused, 2, false), { step: 'retry', waitMs: 300000 });
+  assert.deepEqual(H.upscaleFailureStep(refused, 3, false), { step: 'retry', waitMs: 900000 });
+  assert.equal(H.upscaleFailureStep(refused, 4, false).step, 'giveUp');
+  assert.equal(H.upscaleFailureStep(refused, 1, true).step, 'stillRefused', 'a failed check stops straight away');
+  assert.equal(H.upscaleFailureStep({ limit: true }, 1, false).step, 'limit');
+  assert.equal(H.upscaleFailureStep({ defer: true }, 9, false).step, 'other');
+  assert.equal(H.upscaleFailureStep(other, 2, false).step, 'other', 'two script errors are not a limit');
+  assert.equal(H.upscaleFailureStep(other, 5, false).step, 'giveUp');
+});
+
+test('describePlan: a recorded pause says Download checks it first', () => {
+  const now = Date.now(), st = { quality: 'upscaled', images: true, onLimit: 'stop', delayMs: 0 };
+  const lim = { now, perDay: 0, log: [], pausedUntil: now + 3600000 };
+  assert.match(H.describePlan(H.planRun([{ kind: 'image', mediaId: 'a' }], st, lim), st, lim), /tries one upscale first/);
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

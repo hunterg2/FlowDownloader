@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.18
+// @version      0.3.19
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.18';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.19';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -536,6 +536,23 @@
     for (const it of items) ms += !upscalable(it, settings) ? perOrig : it.kind === 'video' ? perVideoUp : perUp;
     return ms;
   }
+  // How long to wait before trying a picture again after Flow says "Upscaling failed!".
+  const UPSCALE_RETRY_WAITS_SEC = [60, 300, 900];
+  /** What to do after a failed upscale. streak counts the failures in a row, this one included;
+   *  probing means this run is checking whether a recorded limit is over.
+   *  limit: Flow said so in words, or greyed out its upscale entries. retry: wait waitMs and try
+   *  the same picture again. stillRefused: the check failed, stop. giveUp: stop this run, but
+   *  don't claim it was the daily limit. other: treat it as one picture's failure. */
+  function upscaleFailureStep(e, streak, probing) {
+    if (e && e.limit) return { step: 'limit' };
+    if (e && e.defer) return { step: 'other' };
+    if (e && e.refused) {
+      if (probing) return { step: 'stillRefused' };
+      if (streak <= UPSCALE_RETRY_WAITS_SEC.length) return { step: 'retry', waitMs: UPSCALE_RETRY_WAITS_SEC[streak - 1] * 1000 };
+      return { step: 'giveUp' };
+    }
+    return { step: streak >= 5 ? 'giveUp' : 'other' };
+  }
   /** Plans a run against the upscale limits, walking the items in run order the way runDownload
    *  does. lim: { now, perDay (0 = not known), log (times of past upscales), pausedUntil, runUps
    *  (upscales already done this run) }. Returns how long the run lasts (ms), how many upscales fit
@@ -583,7 +600,7 @@
     const days = lim.perDay > 0 ? ` That leaves ${n(rest)} for later, about ${n(Math.ceil(rest / lim.perDay))} more day${Math.ceil(rest / lim.perDay) === 1 ? '' : 's'} at ${n(lim.perDay)} a day.` : ` That leaves ${n(rest)} for later runs.`;
     const all = ` Upscaling all ${n(p.wanted)} would take ${approx(p.fullMs)} of running with no limit.`;
     const stop = settings.onLimit !== 'originals';
-    if (p.blocked === 'paused') return `Upscaling is paused until ${fmtHuman(lim.pausedUntil)} (the limit was hit), so the ${n(p.wanted)} to upscale are ${stop ? 'skipped' : 'saved at original quality meanwhile'}. The run takes ${runs}.${all}`;
+    if (p.blocked === 'paused') return `A limit was recorded, so upscaling is paused until ${fmtHuman(lim.pausedUntil)}. Download tries one upscale first: if it works, the pause ends and the run carries on. If Flow refuses, the ${n(p.wanted)} to upscale are ${stop ? 'skipped' : 'saved at original quality meanwhile'} and the run takes ${runs}.${all}`;
     if (p.stopped) return `The daily upscale limit (${perDay}) stops this run after about ${n(p.ups)} upscales: ${runs}.${all}${days}`;
     if (p.blocked === 'day') return `About ${n(p.ups)} get upscaled before the daily limit (${perDay}); the rest are saved at original quality meanwhile. The run takes ${runs}.${all}${days}`;
     if (p.runCapped) return `Max per run (${n(settings.maxUpscalesPerRun)}) upscales ${n(p.ups)} of ${n(p.wanted)} this run: ${runs}.${all}${days}`;
@@ -694,7 +711,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
-    gridRanks, estimateRunMs, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, offGrid, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
+    gridRanks, estimateRunMs, upscaleFailureStep, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, offGrid, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
     groupDeferred, markKey, markState, filterItems, spotKey, spotFor, holdSpot, advanceSpot, rewindSpots, seedSpots, describeSpots,
   };
   if (IS_NODE) { module.exports = helpers; return; }
@@ -1042,7 +1059,7 @@
   (function startNetObserver() {
     try {
       const po = new PerformanceObserver((list) => {
-        for (const e of list.getEntries()) if (e.name && e.name.includes('/data/batchexecute')) batchObserved.push({ t: Date.now(), url: e.name, bytes: e.transferSize || e.encodedBodySize || 0 });
+        for (const e of list.getEntries()) if (e.name && e.name.includes('/data/batchexecute')) batchObserved.push({ t: Date.now(), url: e.name, bytes: e.transferSize || e.encodedBodySize || 0, status: e.responseStatus || 0 });
         if (batchObserved.length > 3000) batchObserved.splice(0, batchObserved.length - 1500);
       });
       po.observe({ type: 'resource', buffered: true });
@@ -1078,6 +1095,16 @@
   })();
   function toastsSince(t0) { return toastLog.filter((x) => x.t >= t0); }
   class UpscaleLimitError extends Error { constructor(toast, msg) { super(msg || `Flow reports the upscale limit: "${toast}"`); this.limit = true; this.toast = toast; } }
+  /** Closes Flow's "Upscaling failed!" message, so an old one can't be counted against the next try. */
+  function dismissFlowErrors() {
+    try {
+      for (const b of document.querySelectorAll('button')) {
+        if (!/dismiss/i.test(textOf(b)) || !isVisible(b)) continue;
+        const box = b.closest(TOAST_SEL) || b.parentElement;
+        if (box && FAIL_RE.test(box.textContent || '')) clickEl(b);
+      }
+    } catch (e) { /* ignore */ }
+  }
   class UpscaleDeferError extends Error { constructor(msg, noGrid) { super(msg); this.defer = true; this.noGrid = !!noGrid; } }
 
   function fireMouse(el, type, init) {
@@ -1372,7 +1399,13 @@
       const checkToasts = () => {
         for (const t of toastsSince(t0)) {
           if (LIMIT_RE.test(t.text)) { pressEscape(); throw new UpscaleLimitError(t.text); }
-          if (FAIL_RE.test(t.text)) { pressEscape(); throw new Error(`Flow reported: "${t.text}"`); }
+          if (FAIL_RE.test(t.text)) {
+            pressEscape();
+            const codes = uniq(upscaleCallsSince(t0, settings).map((b) => b.status).filter(Boolean));
+            const err = new Error(`Flow reported: "${t.text}"${codes.length ? ` (server answered ${codes.join(', ')})` : ''}`);
+            err.refused = true; // Flow's own refusal, as opposed to the script failing to drive the page
+            throw err;
+          }
         }
       };
       while (Date.now() < deadline) {
@@ -1629,7 +1662,7 @@
       ui.renderItems(keep);
       if (!keep.length) { ui.finish('Nothing to download: ' + skipSummaryShort(f) + '.'); return; }
       const upMode = anyUpscale(settings);
-      let upAllowed = upMode;
+      let upAllowed = upMode, probing = false;
       const limitPauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
       if (upMode) {
         const cur = currentProjectId();
@@ -1640,8 +1673,13 @@
         log(`Upscaled mode: Flow will upscale ${what}, else the best size your plan allows, one at a time (pause ${settings.upscalePauseSec}s between).${plain ? ` ${plain} are saved at original quality.` : ''}`);
         const limitAt = store.get('fbd.upscaleLimitAt', 0);
         if (limitAt && Date.now() - limitAt < limitPauseMs) {
-          log(`⏸ Flow's upscale limit was hit at ${fmtHuman(limitAt)}; upscaling is paused until ${fmtHuman(limitAt + limitPauseMs)} (${settings.onLimit === 'originals' ? 'saving originals meanwhile' : 'those pictures are deferred'}). Use "Reset limit pause" to override.`);
-          upAllowed = false;
+          if (opts.auto) {
+            log(`⏸ Flow's upscale limit was recorded at ${fmtHuman(limitAt)}; upscaling is paused until ${fmtHuman(limitAt + limitPauseMs)} (${settings.onLimit === 'originals' ? 'saving originals meanwhile' : 'those pictures are deferred'}). Automatic runs wait it out; pressing Download checks it.`);
+            upAllowed = false;
+          } else {
+            probing = true;
+            log(`Flow's upscale limit was recorded at ${fmtHuman(limitAt)}. Trying one upscale to check: if it works, the pause ends and the run carries on.`);
+          }
         }
         if (upAllowed && settings.dailyUpscaleCap > 0) log(`Upscales in the last 24 h: ${upscalesLast24h()} / ${settings.dailyUpscaleCap}`);
       }
@@ -1654,13 +1692,13 @@
       const defer = (it, reason) => { deferred++; deferredList.push({ it, reason }); holdSpot(held, it, settings); };
       const deferRest = (from, reason) => { for (let j = from; j < keep.length; j++) defer(keep[j], reason); };
       ui.setDeferred(deferredList);
-      const pausedText = () => { const at = store.get('fbd.upscaleLimitAt', 0); return at ? `upscaling is paused until ${fmtHuman(at + limitPauseMs)}` : 'upscaling is paused'; };
-      const hitLimit = (reason) => {
+      const pausedText = () => { const at = store.get('fbd.upscaleLimitAt', 0); return at && Date.now() - at < limitPauseMs ? `upscaling is paused until ${fmtHuman(at + limitPauseMs)}` : 'no pause is set, so Download can try again'; };
+      const hitLimit = (reason, confirmed) => {
         rememberFlowLimit();
-        store.set('fbd.upscaleLimitAt', Date.now());
+        if (confirmed) store.set('fbd.upscaleLimitAt', Date.now()); // only Flow's own words or greyed-out entries start the pause
         upAllowed = false;
         log(`⚠ ${reason}`);
-        notifyUser(settings, 'Flow Bulk Downloader', 'Upscale limit reached — upscaling paused.');
+        notifyUser(settings, 'Flow Bulk Downloader', confirmed ? 'Upscale limit reached — upscaling paused.' : 'Flow stopped upscaling — run again to retry.');
       };
       for (let i = 0; i < keep.length; i++) {
         if (stopFlag) { log('Stopped.'); break; }
@@ -1693,6 +1731,7 @@
               if (!r.upscaled) { noUpscale = true; log(`  Flow's menu offers no upscaled sizes for ${it.mediaId.slice(0, 8)} (e.g. an uploaded picture); saved at original quality and counted as done`); }
               if (r.upscaled) {
                 upscalesDone++; recordUpscale(); upFailStreak = 0;
+                if (probing) { probing = false; store.set('fbd.upscaleLimitAt', 0); log('✔ That upscale worked, so the recorded limit is over. Carrying on.'); }
                 const pauseMs = Math.max(0, settings.upscalePauseSec || 0) * 1000;
                 if (pauseMs && i < keep.length - 1) activity('Waiting before the next one so Flow is not rushed…', { untilMs: pauseMs });
                 await pacedSleep(pauseMs);
@@ -1700,14 +1739,27 @@
             } catch (e) {
               if (stopFlag) { log('Stopped.'); break; }
               const hadOrig = !!done[doneKey(it.mediaId, false)];
-              let limitMsg = e && e.limit ? e.message : '';
-              // Flow does not always word the limit clearly, so two failed upscales in a row count as the limit
-              if (!limitMsg && !(e && e.defer) && ++upFailStreak >= 2) limitMsg = `${upFailStreak} upscales failed in a row (last: ${e.message}), so Flow's upscale limit is probably reached`;
-              if (limitMsg) {
-                hitLimit(limitMsg);
-                if (settings.onLimit !== 'originals') { log(`Stopping this run. Run again after ${fmtHuman(Date.now() + limitPauseMs)}; nothing was marked as done, so these items will be retried.`); deferRest(i, `Flow's upscale limit stopped the run; ${pausedText()}`); break; }
-                log('Continuing with original quality for the rest; they stay queued for upscaling after the pause.');
-                if (hadOrig) { defer(it, `Flow's upscale limit was reached and its original is already saved; it waits for upscaling (${pausedText()})`); log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
+              if (e && !e.limit && !e.defer) upFailStreak++;
+              const next = upscaleFailureStep(e, upFailStreak, probing);
+              if (next.step === 'retry') {
+                // "Upscaling failed!" is often temporary, and it's also how Flow's real limit can look,
+                // so wait and try the same picture again before deciding anything.
+                dismissFlowErrors();
+                const mins = Math.round(next.waitMs / 60000), tries = UPSCALE_RETRY_WAITS_SEC.length + 1;
+                log(`  Flow couldn't upscale ${it.mediaId.slice(0, 8)} (${e.message}). Waiting ${mins} min, then trying it again (try ${upFailStreak + 1} of ${tries}).`);
+                activity(`Flow refused that upscale. Waiting ${mins} min before trying again…`, { untilMs: next.waitMs });
+                await pacedSleep(next.waitMs);
+                if (stopFlag) { log('Stopped.'); break; }
+                i--; continue;
+              }
+              if (next.step === 'limit' || next.step === 'stillRefused' || next.step === 'giveUp') {
+                const confirmed = next.step === 'limit';
+                if (confirmed) hitLimit(e.message, true);
+                else if (next.step === 'stillRefused') hitLimit(`Flow still refuses upscales (${e.message}), so the recorded limit looks real.`, false);
+                else hitLimit(`Flow refused ${upFailStreak} upscale tries in a row (last: ${e.message}). That can be its daily limit or a temporary problem.`, false);
+                if (settings.onLimit !== 'originals') { log(`Stopping this run. Nothing was marked as done, so these items will be retried; ${pausedText()}.`); deferRest(i, `Flow stopped upscaling; ${pausedText()}`); break; }
+                log('Continuing with original quality for the rest; they stay queued for upscaling.');
+                if (hadOrig) { defer(it, `Flow stopped upscaling and its original is already saved; it waits for upscaling (${pausedText()})`); log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
                 r = await downloadItem(it, settings, log);
               } else if (e && e.defer && (tabHidden() || hiddenAt >= attemptAt) && hiddenRetries++ < 3) {
                 i--; continue; // the tab was hidden mid-attempt: wait for it, then retry this picture
@@ -2410,7 +2462,7 @@
       const pauseMs = Math.max(1, settings.limitPauseHours || 24) * 3600000;
       const warn = $('statusWarn');
       warn.hidden = !(limitAt && Date.now() - limitAt < pauseMs);
-      if (!warn.hidden) warn.textContent = `⏸ Flow's upscale limit was hit ${fmtHuman(limitAt)}. Upscaling is paused until ${fmtHuman(limitAt + pauseMs)} (Options → Upscaling → Reset limit pause).`;
+      if (!warn.hidden) warn.textContent = `⏸ Flow's upscale limit was recorded ${fmtHuman(limitAt)}. Upscaling is paused until ${fmtHuman(limitAt + pauseMs)}, unless the first upscale of your next Download works.`;
       renderSummaries();
     }
     function renderSummaries() {
@@ -2887,7 +2939,7 @@
           if (running) return;
           if (!getWiz().at) { log('Auto-check skipped: no session token (signed out?).'); return; }
           log(`Auto-check (every ${settings.autoMinutes} min)…`);
-          setRunning(true, true); runDownload(settings, ui);
+          setRunning(true, true); runDownload(settings, ui, { auto: true });
         }, settings.autoMinutes * 60000);
       }
     }
@@ -2925,7 +2977,7 @@
         if (cancelled || running) return;
         await waitUntil(() => getWiz().at, 20000, 500);
         if (!getWiz().at) { log('Run on load: no session token; skipping.'); setRunning(false); return; }
-        setRunning(true, true); runDownload(settings, ui);
+        setRunning(true, true); runDownload(settings, ui, { auto: true });
       }, 8000);
     })();
 

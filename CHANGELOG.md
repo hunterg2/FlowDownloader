@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.19 — 2026-11-08
+
+- **"Upscaling failed!" no longer counts as the daily limit.** Two of those in a row used to stop the run and block upscaling for 24 hours, even after only 31 upscales. Now the script waits and tries the same picture again after 1, 5 and 15 minutes. If all four tries fail it stops the run, but sets no pause.
+- **A recorded limit gets checked.** While upscaling is paused, **Download** tries one upscale first. If it works, the pause ends by itself and the run carries on. Automatic runs still wait it out.
+- When Flow refuses an upscale, the log now shows the server's answer too, to help tell a real limit from a temporary problem.
+
 ## 0.3.18 — 2026-11-05
 
 - **Each project remembers where you got to, separately for each quality.** The Download tab shows, for example, *Last saved in LUNA 2: Original 2026-10-29 00:03 · 2K 2026-10-08 04:01*. Pictures and videos, and Original, 2K and 4K, each have their own date. A Scan works it out from your past runs the first time.
