@@ -73,7 +73,7 @@ To get an update straight away:
    **Update** (or **Reinstall**).
 2. **Reload the Flow tab.** An update only takes effect when the page loads again; a tab that
    was already open keeps running the old version.
-3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.19**. The
+3. Check the panel's header. It shows the version, for example **⬇ Flow Export v0.3.20**. The
    [changelog](CHANGELOG.md) lists what changed in each version.
 
 Updating never loses your download history or settings.
@@ -178,8 +178,13 @@ Good to know:
   appears if upscaling is paused because Flow's daily limit was hit.
 - **Download tab:** what you change each run: dates, pictures/videos, a quality switch for
   each (Original or Upscaled), the buttons, and
-  a **progress card** with the count ("3 / 11"), a bar, the current step, the time left and how
-  many were saved, failed or deferred.
+  a **progress card** with two bars, the current step, the time left and how many were saved,
+  failed or deferred. **This run** goes to where the upscale limit is expected to stop the run, or
+  through what you selected if nothing will cut it short. **Folder** shows how much of the whole
+  project is saved at the chosen resolution, counting every earlier run and hand marks, whatever
+  the dates or ticks. It leaves out the Trash. If a run is simply the rest of the folder and
+  nothing can stop it, only the Folder bar shows. The limit is an estimate, so a run can stop
+  before or carry on past it.
 - **Options tab:** filters, upscaling, projects, saving and automation. Each section's heading
   shows its current setting, so you don't need to open it to check.
 - **Tools tab:** history, exports and backup, Diagnose, credits, Learn mode and Advanced.

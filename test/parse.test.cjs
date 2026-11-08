@@ -535,4 +535,68 @@ test('describePlan: a recorded pause says Download checks it first', () => {
   assert.match(H.describePlan(H.planRun([{ kind: 'image', mediaId: 'a' }], st, lim), st, lim), /tries one upscale first/);
 });
 
+test('folder bar: counts every run at the chosen quality, ignores dates and keeps the Trash out', () => {
+  const base = { images: true, videos: false, quality: 'upscaled', videoQuality: 'original', imageUpscale: '2K', skipDone: true, sinceLocal: '2099-01-01T00:00', keywordInclude: 'nomatch', includeTrash: true };
+  const items = [
+    { mediaId: 'a', kind: 'image', title: 'one', createdMs: 1 },
+    { mediaId: 'b', kind: 'image', title: 'two', createdMs: 2 },
+    { mediaId: 'c', kind: 'image', title: 'three', createdMs: 3 },
+    { mediaId: 'd', kind: 'image', title: 'in trash', createdMs: 4, trashed: true },
+    { mediaId: 'e', kind: 'image', title: 'photo.jpg', createdMs: 5 },
+  ];
+  const f = H.folderItems(items, base);
+  assert.deepEqual(f.map((i) => i.mediaId), ['a', 'b', 'c', 'e']);
+  // a 2K counts, an original of a generated picture doesn't, an uploaded file's original does
+  const done = { [H.doneKey('a', true, '2K')]: {}, b: {}, e: {} };
+  assert.equal(H.countSaved(f, base, done), 2);
+  const orig = Object.assign({}, base, { quality: 'original' });
+  assert.equal(H.countSaved(f, orig, done), 2);
+  assert.equal(H.folderQualityLabel(base), '2K');
+  assert.equal(H.folderQualityLabel(orig), '1K');
+  const bar = H.folderBarInfo({ saved: 3816, total: 7105, label: '2K', projects: 1 });
+  assert.equal(bar.name, 'Folder · 2K');
+  assert.equal(bar.nums, '3,816 / 7,105 saved');
+  assert.equal(H.barPct(bar.frac), 54);
+  assert.equal(H.folderBarInfo({ saved: 0, total: 0 }), null);
+  assert.equal(H.barPct(7104 / 7105), 99);
+  assert.equal(H.barPct(1), 100);
+});
+
+test('run bar: goes to the limit when one ends the run, otherwise follows the selection', () => {
+  const lim = H.runBarInfo(50, 3736, { plan: { stopped: true, ups: 42, wanted: 3700 }, runUps: 18 });
+  assert.equal(lim.name, 'This run · until the upscale limit');
+  assert.equal(lim.nums, '18 / 60 upscales');
+  assert.equal(H.barPct(lim.frac), 30);
+  const atLimit = H.runBarInfo(70, 3736, { plan: { stopped: true, ups: 0, wanted: 3600 }, runUps: 185 });
+  assert.equal(atLimit.name, 'This run · at the expected limit');
+  assert.equal(atLimit.frac, 1);
+  assert.equal(H.runBarInfo(5, 500, { plan: { runCapped: true, ups: 5, wanted: 400 }, runUps: 5 }).name, 'This run · until your Max per run');
+  const probe = H.runBarInfo(0, 100, { plan: { blocked: 'paused', ups: 0, wanted: 100 }, probing: true });
+  assert.equal(probe.frac, 0);
+  assert.match(probe.name, /check the limit/);
+  // not upscaling, part of the folder: the selection
+  const sel = H.runBarInfo(25, 100, { plan: { wanted: 0, ups: 0 }, limitUnknown: true, coversFolder: false });
+  assert.equal(sel.name, 'This run');
+  assert.equal(sel.nums, '25 / 100');
+  assert.equal(sel.hidden, false);
+  // not upscaling, everything that's left: the folder bar says it all
+  assert.equal(H.runBarInfo(25, 100, { plan: { wanted: 0, ups: 0 }, limitUnknown: true, coversFolder: true }).hidden, true);
+  // upscaling everything left with no known limit: keep it, since the run may stop
+  const unk = H.runBarInfo(25, 100, { plan: { wanted: 75, ups: 75 }, limitUnknown: true, coversFolder: true });
+  assert.equal(unk.name, 'This run · limit not known yet');
+  assert.equal(unk.hidden, false);
+});
+
+test('run bar: the end of a run shows what really happened', () => {
+  const lim = H.runBarInfo(30, 3736, { plan: { stopped: true, ups: 150, wanted: 3700 }, runUps: 30 });
+  const cut = H.finalRunBar(lim, 31, 31, 3736, false);
+  assert.equal(cut.nums, '31 / 180 upscales');
+  assert.equal(H.barPct(cut.frac), 17);
+  const sel = H.runBarInfo(40, 100, { plan: { wanted: 0, ups: 0 } });
+  assert.equal(H.finalRunBar(sel, 0, 100, 100, true).frac, 1);
+  assert.equal(H.finalRunBar(sel, 0, 41, 100, false).nums, '41 / 100');
+  const probe = H.runBarInfo(0, 100, { plan: {}, probing: true });
+  assert.equal(H.finalRunBar(probe, 0, 0, 100, false).name, 'This run');
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

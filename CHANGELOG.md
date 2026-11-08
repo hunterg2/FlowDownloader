@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.20 — 2026-11-08
+
+- **Two progress bars.** **This run** starts at 0% and fills to where the upscale limit is expected to stop the run (for example *18 / 60 upscales*). If nothing will cut the run short, it follows what you selected instead. **Folder** shows how much of the whole project is saved at the chosen resolution, counting earlier runs and hand marks, and ignoring dates and ticks (for example *3,816 / 7,105 saved*). The small card shows both.
+- If a run is just the rest of the folder and nothing can stop it, only the Folder bar shows.
+
 ## 0.3.19 — 2026-11-08
 
 - **"Upscaling failed!" no longer counts as the daily limit.** Two of those in a row used to stop the run and block upscaling for 24 hours, even after only 31 upscales. Now the script waits and tries the same picture again after 1, 5 and 15 minutes. If all four tries fail it stops the run, but sets no pause.

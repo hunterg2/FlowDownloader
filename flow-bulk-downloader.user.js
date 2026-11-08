@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.19
+// @version      0.3.20
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -67,7 +67,7 @@
 
   const IS_NODE = typeof module !== 'undefined' && module.exports && typeof window === 'undefined';
   const PAGE = typeof unsafeWindow !== 'undefined' ? unsafeWindow : (typeof window !== 'undefined' ? window : {});
-  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.19';
+  const VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '0.3.20';
 
   // ---------------------------------------------------------------------------
   // Pure helpers (also exported for unit tests)
@@ -581,6 +581,60 @@
     }
     return { ms: t - lim.now, endAt: t, fullMs, wanted, ups, blocked, blockedAt, stopped, runCapped };
   }
+  /** Whether this item is already saved at the quality settings ask for; returns the history entry. */
+  function savedEntry(it, settings, done) {
+    const wantUp = upscalable(it, settings);
+    const orig = done[doneKey(it.mediaId, false)];
+    const saved = done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(it.kind || 'unknown', settings))];
+    return saved || (wantUp && orig && (orig.noUpscale || isUploadedFile(it)) ? orig : null);
+  }
+  /** Everything the folder bar counts: dates, keywords and ticks narrow a run, not the folder, and the Trash stays out. */
+  function folderItems(items, settings) {
+    const whole = Object.assign({}, settings, { includeTrash: false, keywordInclude: '', keywordExclude: '', modelFilter: '' });
+    return filterItems(items, whole, { ignoreDone: true, ignoreDates: true }).keep;
+  }
+  function countSaved(items, settings, done) { return items.reduce((n, it) => n + (savedEntry(it, settings, done) ? 1 : 0), 0); }
+  /** The resolution named on the folder bar. */
+  function folderQualityLabel(settings) {
+    return [settings.images && (wantsUpscale('image', settings) ? pickUpscaleSize('image', settings) : '1K'),
+      settings.videos && (wantsUpscale('video', settings) ? pickUpscaleSize('video', settings) : '720p')].filter(Boolean).join(' + ');
+  }
+  const barCount = (k) => k.toLocaleString('en-US');
+  /** A bar's percent; it only says 100 when the bar is really full. */
+  function barPct(frac) {
+    const f = Math.max(0, Math.min(1, frac || 0)), p = Math.round(f * 100);
+    return p === 100 && f < 1 ? 99 : p;
+  }
+  function makeBar(unit, name, mini, done, goal, nums, frac) { return { unit, name, mini, done, goal, nums, frac: frac != null ? frac : (goal > 0 ? Math.min(1, done / goal) : 0) }; }
+  /** The top bar. While the upscale limit (or Max per run) will end the upscaling, it runs from 0 to
+   *  where that's expected; otherwise it's the items this run was given. plan is planRun for the
+   *  items still to do. o: { plan, runUps, probing, limitUnknown, coversFolder }. hidden: the run
+   *  is simply the rest of the folder and nothing can cut it short, so the folder bar says it all. */
+  function runBarInfo(i, n, o) {
+    const plan = o.plan || {}, runUps = o.runUps || 0;
+    if (o.probing) return makeBar('check', 'This run · trying one upscale to check the limit', 'Run', 0, 0, '');
+    if (plan.stopped || plan.runCapped) {
+      if (!plan.ups) return makeBar('limit', `This run · at ${plan.stopped ? 'the expected limit' : 'your Max per run'}`, 'Run', runUps, runUps, `${barCount(runUps)} upscale${runUps === 1 ? '' : 's'}`, runUps ? 1 : 0);
+      const goal = runUps + plan.ups;
+      return makeBar('limit', `This run · until ${plan.stopped ? 'the upscale limit' : 'your Max per run'}`, 'Run', runUps, goal, `${barCount(runUps)} / ${barCount(goal)} upscales`);
+    }
+    const unknown = !!o.limitUnknown && plan.wanted > 0;
+    const bar = makeBar('items', `This run${unknown ? ' · limit not known yet' : ''}`, 'Run', i, n, `${barCount(i)} / ${barCount(n)}`);
+    bar.hidden = !!o.coversFolder && !unknown;
+    return bar;
+  }
+  /** The top bar once the run is over. */
+  function finalRunBar(bar, upscales, handled, n, reachedEnd) {
+    if (bar && bar.unit === 'limit') { const goal = Math.max(bar.goal, upscales); return makeBar('limit', bar.name, 'Run', upscales, goal, goal ? `${barCount(upscales)} / ${barCount(goal)} upscales` : `${barCount(upscales)} upscales`); }
+    const done = reachedEnd ? n : handled, out = makeBar('items', 'This run', 'Run', done, n, `${barCount(done)} / ${barCount(n)}`);
+    out.hidden = !!(bar && bar.hidden);
+    return out;
+  }
+  /** The folder bar; null when there's nothing to measure. */
+  function folderBarInfo(f) {
+    if (!f || !f.total) return null;
+    return makeBar('folder', `${f.projects > 1 ? `${barCount(f.projects)} folders` : 'Folder'}${f.label ? ` · ${f.label}` : ''}`, 'Folder', f.saved, f.total, `${barCount(f.saved)} / ${barCount(f.total)} saved`);
+  }
   function fmtDuration(ms) {
     const min = Math.round(Math.max(0, ms) / 60000);
     if (min < 1) return 'under a minute';
@@ -711,6 +765,7 @@
     isUuid, epochMs, tsPairMs, guessCreatedMs, parseBatchResponse, extractItems, readAssetEntry, readRecord,
     pickContentUrl, buildFileName, buildRelPath, safeName, extFromMime, sniffExt, collectUrls, splitUrls, redact, scanJsonEnd,
     detectModel, compileTerms, matchesKeywords, csvEscape, toCsv, countSince, inferLearned, fmtMonth,
+    savedEntry, folderItems, countSaved, folderQualityLabel, barPct, runBarInfo, finalRunBar, folderBarInfo,
     gridRanks, estimateRunMs, upscaleFailureStep, planRun, describePlan, fmtDuration, describeMatches, wantsUpscale, upscalable, offGrid, isUploadedFile, anyUpscale, pickUpscaleSize, doneKey, thumbUrl,
     groupDeferred, markKey, markState, filterItems, spotKey, spotFor, holdSpot, advanceSpot, rewindSpots, seedSpots, describeSpots,
   };
@@ -1552,10 +1607,8 @@
         if (until != null && it.createdMs > until) { out.skippedDate++; continue; }
       }
       if (settings.skipDone && !opts.ignoreDone) {
-        const wantUp = upscalable(it, settings);
-        const orig = done[doneKey(it.mediaId, false)];
-        const saved = done[doneKey(it.mediaId, wantUp, wantUp && pickUpscaleSize(kind, settings))];
-        if (saved || (wantUp && orig && (orig.noUpscale || isUploadedFile(it)))) { out.skippedDone++; if (saved && saved.manual) out.skippedMarked++; continue; }
+        const saved = savedEntry(it, settings, done);
+        if (saved) { out.skippedDone++; if (saved.manual) out.skippedMarked++; continue; }
       }
       if (spots && !offGrid(it) && it.createdMs != null) {
         const spot = spotFor(spots, it, settings);
@@ -1686,7 +1739,15 @@
       { const { lim, plan } = planFor(keep, settings); log(describePlan(plan, settings, lim)); }
       const done = loadDone();
       let ok = 0, fail = 0, upscalesDone = 0, deferred = 0, failStreak = 0, noGridStreak = 0, gridMissing = false;
-      let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0;
+      let retryIdx = -1, hiddenRetries = 0, upFailStreak = 0, stoppedEarly = false;
+      // The two bars on the card: the whole folder at this quality, counting every earlier run.
+      const folder = folderItems(s.items, settings), folderLabel = folderQualityLabel(settings);
+      const folderProjects = new Set(folder.map((it) => it.projectId || '')).size;
+      const folderLeft = folder.length - countSaved(folder, settings, done);
+      const barContext = () => ({
+        probing, coversFolder: !!settings.skipDone && folderLeft > 0 && keep.length >= folderLeft,
+        folder: { saved: countSaved(folder, settings, done), total: folder.length, label: folderLabel, projects: folderProjects },
+      });
       // Each deferred item and why, so clicking "deferred" on the card can list them.
       const deferredList = [];
       const defer = (it, reason) => { deferred++; deferredList.push({ it, reason }); holdSpot(held, it, settings); };
@@ -1710,7 +1771,7 @@
           store.set('fbd.upscaleLimitAt', isFinite(oldest) ? oldest : Date.now());
           upAllowed = false;
           log(`⏸ Daily upscale cap of ${settings.dailyUpscaleCap} reached (counted locally); upscaling pauses until ${fmtHuman((isFinite(oldest) ? oldest : Date.now()) + limitPauseMs)}.`);
-          if (settings.onLimit !== 'originals') { deferRest(i, `the run stopped at your Daily cap of ${settings.dailyUpscaleCap} upscales; ${pausedText()}`); log('Remaining upscales are deferred to a later run.'); break; }
+          if (settings.onLimit !== 'originals') { deferRest(i, `the run stopped at your Daily cap of ${settings.dailyUpscaleCap} upscales; ${pausedText()}`); log('Remaining upscales are deferred to a later run.'); stoppedEarly = true; break; }
         }
         if (needsUp && !upAllowed && settings.onLimit !== 'originals') { defer(it, `the upscale limit was reached and ${pausedText()}`); continue; }
         if (needsUp && !upAllowed && done[doneKey(it.mediaId, false)]) { defer(it, `its original is already saved; it waits for upscaling (${pausedText()})`); continue; }
@@ -1718,7 +1779,7 @@
           if (deferred === 0) log(`Per-run upscale budget of ${settings.maxUpscalesPerRun} reached; remaining upscales are deferred to the next run.`);
           defer(it, `the per-run upscale budget of ${settings.maxUpscalesPerRun} was used up`); continue;
         }
-        ui.progress(i, keep.length, it, { ok, fail, deferred }, { keep, runUps: upscalesDone });
+        ui.progress(i, keep.length, it, { ok, fail, deferred }, Object.assign({ keep, runUps: upscalesDone }, barContext()));
         try {
           let r, upscaleFailed = false, noUpscale = false;
           if (needsUp && upAllowed) {
@@ -1757,7 +1818,7 @@
                 if (confirmed) hitLimit(e.message, true);
                 else if (next.step === 'stillRefused') hitLimit(`Flow still refuses upscales (${e.message}), so the recorded limit looks real.`, false);
                 else hitLimit(`Flow refused ${upFailStreak} upscale tries in a row (last: ${e.message}). That can be its daily limit or a temporary problem.`, false);
-                if (settings.onLimit !== 'originals') { log(`Stopping this run. Nothing was marked as done, so these items will be retried; ${pausedText()}.`); deferRest(i, `Flow stopped upscaling; ${pausedText()}`); break; }
+                if (settings.onLimit !== 'originals') { log(`Stopping this run. Nothing was marked as done, so these items will be retried; ${pausedText()}.`); deferRest(i, `Flow stopped upscaling; ${pausedText()}`); stoppedEarly = true; break; }
                 log('Continuing with original quality for the rest; they stay queued for upscaling.');
                 if (hadOrig) { defer(it, `Flow stopped upscaling and its original is already saved; it waits for upscaling (${pausedText()})`); log(`  ⏭ ${it.mediaId.slice(0, 8)}: its original is already saved`); continue; }
                 r = await downloadItem(it, settings, log);
@@ -1803,7 +1864,7 @@
           holdSpot(held, it, settings);
           log(`✘ ${it.mediaId.slice(0, 8)} ${fmtHuman(it.createdMs)}: ${e.message}`);
           rows.push({ savedAt: new Date().toISOString(), mediaId: it.mediaId, projectId: it.projectId || '', projectTitle: projectTitleFor(it.projectId), title: it.title || '', created: it.createdMs != null ? new Date(it.createdMs).toISOString() : '', kind: it.kind, model: it.model || '', quality: '', file: '', bytes: '', status: 'failed: ' + e.message, flowSizeBytes: it.sizeBytes || '' });
-          if (failStreak >= 6) { log('6 failures in a row — stopping this run so Flow is not hammered. Check the log / Diagnose, then run again.'); break; }
+          if (failStreak >= 6) { log('6 failures in a row — stopping this run so Flow is not hammered. Check the log / Diagnose, then run again.'); stoppedEarly = true; break; }
           if (failStreak >= 3) { log('3 failures in a row — pausing 2 minutes before continuing.'); activity('Pausing after 3 failures in a row…', { untilMs: 120000 }); await pacedSleep(120000); }
         }
         await pacedSleep(settings.delayMs);
@@ -1820,7 +1881,7 @@
       const doneMsg = `Done: ${ok} saved, ${fail} failed${upscalesDone ? `, ${upscalesDone} upscaled` : ''}${deferred ? `, ${deferred} deferred` : ''}.`;
       log(doneMsg);
       if (deferredList.length) log('Deferred, by reason:\n' + groupDeferred(deferredList).map((g) => `  ${g.n} × ${g.reason}`).join('\n'));
-      ui.finish(stopFlag ? 'Stopped. ' + doneMsg : doneMsg, 1, { ok, fail, deferred });
+      ui.finish(stopFlag ? 'Stopped. ' + doneMsg : doneMsg, { ok, fail, deferred }, Object.assign({ upscales: upscalesDone, handled: ok + fail, n: keep.length, reachedEnd: !stopFlag && !stoppedEarly }, barContext()));
       if (!opts.limit && (ok || fail)) notifyUser(settings, 'Flow Bulk Downloader', `Done: ${ok} saved, ${fail} failed${deferred ? `, ${deferred} deferred` : ''}.`);
     } catch (e) {
       log(`Error: ${e.message}`);
@@ -2070,13 +2131,16 @@
         label:has(> input:disabled) { color:var(--muted); }
         .btns { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
         .card { background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:10px; margin:0 0 8px; }
-        .cardTop { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+        .cardTop { margin-bottom:2px; }
         .card.idle .cardTop { display:none; }
         .card.idle .lines > div:first-child { margin-top:0; }
-        .count { font-size:18px; font-weight:700; white-space:nowrap; }
-        .pct { color:var(--muted); font-size:12px; min-width:32px; text-align:right; }
+        .barRow + .barRow { margin-top:8px; }
+        .barHead { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:3px; font-size:12px; }
+        .barHead .barName { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .pct { color:var(--muted); font-size:12px; min-width:32px; text-align:right; white-space:nowrap; }
         .bar { flex:1; height:6px; background:var(--line); border-radius:3px; overflow:hidden; }
         .bar > div { height:100%; background:var(--blue); width:0; transition:width .3s; }
+        .bar.folder > div { background:var(--ok); }
         .lines > div { margin-top:4px; }
         .lines .item { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .lines .step { color:var(--accent); }
@@ -2119,6 +2183,10 @@
         .mini .miniHead { padding:6px 6px 6px 12px; }
         .mini .title { font-size:13px; }
         .miniBar { display:flex; align-items:center; gap:8px; padding:0 12px; }
+        .miniBar[hidden] { display:none; }
+        .miniBar + .miniBar { margin-top:3px; }
+        .miniBar .bar { height:4px; }
+        .miniBar .barTag { color:var(--muted); font-size:11.5px; width:38px; flex:none; }
         .mini .lines { padding:0 12px; }
       </style>
       <div class="panel" id="panel">
@@ -2177,7 +2245,10 @@
               <button class="btn" id="test1" title="Download only the newest matching item, to check everything works">Test 1</button>
             </div>
             <div class="card idle" id="card">
-              <div class="cardTop"><span class="count" id="pCount" hidden></span><div class="bar"><div id="barfill"></div></div><span class="pct" id="pPct"></span></div>
+              <div class="cardTop">
+                <div class="barRow" id="pRunRow"><div class="barHead"><span class="barName" id="pRunName"></span><span class="pct" id="pPct"></span></div><div class="bar"><div id="barfill"></div></div></div>
+                <div class="barRow" id="pFolderRow" hidden><div class="barHead"><span class="barName" id="pFolderName"></span><span class="pct" id="pFolderPct"></span></div><div class="bar folder"><div id="pFolderFill"></div></div></div>
+              </div>
               <div class="lines" id="progress"></div>
             </div>
             <div class="tip" id="popupTip">Chrome's download pop-up can cover this panel. To turn it off: Chrome Settings → Downloads → turn off "Show downloads when they're done". Files still save normally. <button class="link" id="tipHide">Hide</button></div>
@@ -2354,7 +2425,8 @@
           <button class="icon" id="expand" title="Open the full panel">⤢</button>
           <button class="btn danger sm" id="mStop">■ Stop</button>
         </div>
-        <div class="miniBar"><div class="bar"><div id="mBar"></div></div><span class="pct" id="mPct"></span></div>
+        <div class="miniBar" id="mRunRow"><span class="barTag">Run</span><div class="bar"><div id="mBar"></div></div><span class="pct" id="mPct"></span></div>
+        <div class="miniBar" id="mFolderRow" hidden><span class="barTag">Folder</span><div class="bar folder"><div id="mFolderFill"></div></div><span class="pct" id="mFolderPct"></span></div>
         <div class="lines" id="mLines"></div>
       </div>
       <button class="fab on" id="fab" title="Flow Bulk Downloader · drag to move">⬇ Flow Export <span class="badge" id="fabBadge" hidden></span></button>
@@ -2649,16 +2721,23 @@
       try { $('deferBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
     }
     for (const id of ['progress', 'mLines']) $(id).addEventListener('click', (ev) => { if (ev.target.closest('.defLink')) showDeferred(); });
-    function setBar(frac) {
-      const pct = frac == null ? '' : `${Math.round(frac * 100)}%`;
-      $('barfill').style.width = $('mBar').style.width = pct || '0%';
-      $('pPct').textContent = $('mPct').textContent = pct;
+    let runBar = null, folderBar = null;
+    function setBars(run, folder) {
+      runBar = run; folderBar = folder;
+      const draw = (bar, fills, pPct, mPct, rows, nameEl) => {
+        const on = !!bar && !bar.hidden, pct = on ? `${barPct(bar.frac)}%` : '';
+        for (const id of rows) $(id).hidden = !on;
+        for (const id of fills) $(id).style.width = pct || '0%';
+        $(mPct).textContent = pct;
+        $(pPct).textContent = on ? [bar.nums, pct].filter(Boolean).join(' · ') : '';
+        $(nameEl).textContent = on ? bar.name : '';
+      };
+      draw(run, ['barfill', 'mBar'], 'pPct', 'mPct', ['pRunRow', 'mRunRow'], 'pRunName');
+      draw(folder, ['pFolderFill', 'mFolderFill'], 'pFolderPct', 'mFolderPct', ['pFolderRow', 'mFolderRow'], 'pFolderName');
     }
     function renderProgress() {
       const full = [], mini = [];
-      let count = '';
       if (prog && prog.item) {
-        count = `${prog.i + 1} / ${prog.n}`;
         const what = `${prog.item.kind === 'video' ? 'Video' : 'Picture'} · ${prog.item.title || prog.item.mediaId.slice(0, 8)}`;
         full.push(['item', what]); mini.push(['item', what]);
       } else if (prog && prog.text) {
@@ -2700,9 +2779,9 @@
       }
       renderDeferred();
       setLines($('progress'), full); setLines($('mLines'), mini);
-      $('card').classList.toggle('idle', !count && !$('pPct').textContent); // no bar for idle or scan text
-      $('pCount').textContent = $('mCount').textContent = count;
-      $('pCount').hidden = !count;
+      $('card').classList.toggle('idle', !runBar && !folderBar); // no bars for idle or scan text
+      const lead = runBar && !runBar.hidden ? runBar : folderBar; // the small card's title carries the top bar's count
+      $('mCount').textContent = prog && prog.item && lead ? lead.nums : '';
     }
     activity = (text, opts) => {
       act = text ? { text, at: Date.now(), until: opts && opts.untilMs ? Date.now() + opts.untilMs : 0 } : null;
@@ -2711,7 +2790,6 @@
       renderProgress();
     };
     function progress(i, n, item, counts, ctx) {
-      setBar(n ? i / n : 0);
       if (i === 0 || !runStartAt) runStartAt = Date.now();
       const perMs = i > 0 ? (Date.now() - runStartAt) / i : estimateRunMs([item], settings, store.get(AVG_UP_KEY, 0), store.get(AVG_UP_VIDEO_KEY, 0));
       let left = null;
@@ -2723,10 +2801,16 @@
         left = { plan, lim, k, ms: plan.ms * k, fullMs: plan.fullMs * k };
       }
       prog = item ? { i, n, item, perMs, at: Date.now(), counts, left } : null;
+      if (left) {
+        const next = runBarInfo(i, n, { plan: left.plan, runUps: ctx.runUps, probing: ctx.probing, coversFolder: ctx.coversFolder, limitUnknown: !left.lim.perDay });
+        // the estimate shifts a little as the run goes; the bar shouldn't slide back because of it
+        if (runBar && runBar.unit === next.unit) next.frac = Math.max(runBar.frac, next.frac);
+        setBars(next, folderBarInfo(ctx.folder));
+      }
       renderProgress();
     }
-    function finish(text, frac, counts) {
-      if (frac != null) setBar(frac);
+    function finish(text, counts, end) {
+      if (end) setBars(finalRunBar(runBar, end.upscales, end.handled, end.n, end.reachedEnd), folderBarInfo(end.folder));
       prog = { text, counts }; runStartAt = 0;
       const m = /(\d+) saved, (\d+) failed/.exec(text);
       $('fabBadge').textContent = m ? `✔ ${m[1]}${m[2] !== '0' ? ` ✘ ${m[2]}` : ''}` : '!';
@@ -2809,7 +2893,7 @@
       $('lockNote').hidden = !on;
       $('stop').disabled = $('mStop').disabled = !on;
       $('stop').hidden = !on; $('download').hidden = on;
-      if (on) { prog = { text: 'Starting…' }; setBar(0); renderProgress(); }
+      if (on) { prog = { text: 'Starting…' }; setBars({ unit: 'start', name: 'This run', frac: 0, nums: '' }, null); renderProgress(); }
       if (on && compact) {
         compactRun = true; viewBeforeRun = view;
         showTab('main'); setView('mini');
@@ -2859,7 +2943,7 @@
         log(`Would download ${f.keep.length} item(s). Skipped: ${skipSummary(f)}.`);
         let est = '';
         if (f.keep.length) { const { lim, plan } = planFor(f.keep, settings); const t = describePlan(plan, settings, lim); est = '\n' + t; log(t); }
-        setBar(null);
+        setBars(null, null);
         finish(`Scan done, nothing downloaded:\n${describeMatches(f.keep, settings)}.${est}\n${skipSummaryShort(f).replace(/^s/, 'S')}.${f.keep.length ? '\n↓ The matching items are listed below.' : ''}${f.skippedBehind && settings.skipDone ? '\nUntick Start from last saved to get the older ones.' : ''}${f.skippedMarked && !f.keep.length ? '\nHand marks hold pictures back: Tools → Undo marks in range takes them away.' : ''}`);
         excluded.clear(); lastPick = -1;
         renderItems(f.keep, true);
