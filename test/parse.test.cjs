@@ -242,6 +242,16 @@ test('buildRelPath builds project/month folders only when asked', () => {
   assert.equal(H.buildRelPath({ createdMs: null }, 'f.jpg', { subfolder: 'X', folderByMonth: true }), 'X/undated/f.jpg');
 });
 
+test('buildRelPath puts the size folder first when asked: Upscaled<size>, Original1K, Original for clips', () => {
+  const item = { createdMs: Date.UTC(2025, 9, 4), projectId: U(7), kind: 'image' };
+  assert.equal(H.buildRelPath(item, 'f.jpg', { subfolder: 'Flow', folderBySize: true, upscaled: true, sizeLabel: '2K' }), 'Flow/Upscaled2K/f.jpg');
+  assert.equal(H.buildRelPath(item, 'f.jpg', { subfolder: 'Flow', folderBySize: true, upscaled: false }), 'Flow/Original1K/f.jpg');
+  assert.equal(H.buildRelPath(item, 'f.jpg', { subfolder: 'Flow', folderBySize: true, upscaled: true, sizeLabel: '2K', folderByProject: true, folderByMonth: true, projectTitle: 'Luna' }), 'Flow/Upscaled2K/Luna/2025-10/f.jpg');
+  assert.equal(H.buildRelPath({ ...item, kind: 'video' }, 'f.mp4', { subfolder: 'Flow', folderBySize: true, upscaled: true, sizeLabel: '1080p' }), 'Flow/Upscaled1080p/f.mp4');
+  assert.equal(H.buildRelPath({ ...item, kind: 'video' }, 'f.mp4', { subfolder: 'Flow', folderBySize: true, upscaled: false }), 'Flow/Original/f.mp4');
+  assert.equal(H.buildRelPath(item, 'f.jpg', { subfolder: 'Flow', folderBySize: false, upscaled: true, sizeLabel: '2K' }), 'Flow/f.jpg');
+});
+
 test('keyword filters: comma-separated terms, exclusions and /regex/ terms', () => {
   const inc = H.compileTerms('cat, dog');
   const exc = H.compileTerms('draft');

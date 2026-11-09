@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.21 — 2026-11-09
+
+- **Folder per size.** A new tick under **Saving & folders** (Tampermonkey mode) puts each save into a folder named
+  after its quality, before the project and month folders: `Upscaled2K` (or `Upscaled4K`, `Upscaled1080p`, after the
+  size you chose) for upscaled copies, `Original1K` for original pictures and `Original` for original clips. Off by
+  default. Meant for a folder watcher that takes the upscales and archives the originals, so no sorting by hand.
+
 ## 0.3.20 — 2026-11-08
 
 - **Two progress bars.** **This run** starts at 0% and fills to where the upscale limit is expected to stop the run (for example *18 / 60 upscales*). If nothing will cut the run short, it follows what you selected instead. **Folder** shows how much of the whole project is saved at the chosen resolution, counting earlier runs and hand marks, and ignoring dates and ticks (for example *3,816 / 7,105 saved*). The small card shows both.

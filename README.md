@@ -297,8 +297,8 @@ when they're done**. Files still save normally.
 **Where do the files go? Can I save them into folders?**
 By default, straight into your browser's Downloads folder with no subfolders. For subfolders
 (for example `Downloads/Flow/<project>/<month>/`), go to **Options → Saving & folders**, set
-**Save with → Tampermonkey** and tick **Folder per project** / **Folder per month**. See
-[Folders and files](#folders-and-files).
+**Save with → Tampermonkey** and tick **Folder per size**, **Folder per project** or **Folder per month**.
+See [Folders and files](#folders-and-files).
 
 **Chrome asked whether this site can download multiple files.**
 Click **Allow**. Chrome asks this once per site. If you clicked **Block** by mistake, click the
@@ -377,7 +377,10 @@ Under **Options → Saving & folders**:
 - The default **Save with → Browser download** saves every file straight into your browser's
   Downloads folder, with no subfolders.
 - **Save with → Tampermonkey** saves into `Downloads/<Base folder>/<Project>/<YYYY-MM>/…` when
-  **Folder per project** / **Folder per month** are ticked. It also gives upscaled runs a reliable
+  **Folder per project** / **Folder per month** are ticked. **Folder per size** adds a folder before
+  those for the saved quality: `Upscaled2K` (or `Upscaled4K`, `Upscaled1080p`, after the size you
+  chose) for upscaled copies, `Original1K` for original pictures and `Original` for original clips,
+  so a folder watcher can take the upscales and leave the originals. It also gives upscaled runs a reliable
   "saved to disk" signal. Tampermonkey may ask you once to allow file extensions (Dashboard →
   Settings → Downloads BETA: add `jpg png webp mp4 txt json csv`). If this mode fails for a
   file, the script falls back to a plain browser download so nothing is lost.

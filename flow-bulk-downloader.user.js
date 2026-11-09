@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flow Bulk Downloader
 // @namespace    https://github.com/hunterg2/FlowDownloader
-// @version      0.3.20
+// @version      0.3.21
 // @description  Bulk-download every image/video in your Google Flow projects created since a chosen date, at original or upscaled quality, with manifests, folders, filters and rate-limit handling. Runs entirely inside your signed-in flow.google.com tab.
 // @author       hunterg2
 // @homepageURL  https://github.com/hunterg2/FlowDownloader
@@ -400,10 +400,17 @@
     const base = parts.filter(Boolean).join(' - ');
     return `${base}${tag ? ` [${safeName(tag, 30)}]` : ''}.${ext}`;
   }
+  /** The folder a save goes into when "Folder per size" is on: Upscaled2K (or Upscaled4K, Upscaled1080p...)
+   *  for an upscaled copy, Original1K for an original picture and Original for an original clip. */
+  function sizeFolder(item, upscaled, sizeLabel) {
+    if (upscaled) return 'Upscaled' + (safeName(String(sizeLabel || ''), 12).replace(/\s+/g, '') || 'Up');
+    return item && item.kind === 'video' ? 'Original' : 'Original1K';
+  }
   /** Relative path under the downloads folder, for Tampermonkey mode. */
   function buildRelPath(item, fileName, opts) {
     const segs = [];
     if (opts.subfolder) segs.push(safeName(opts.subfolder, 80));
+    if (opts.folderBySize) segs.push(sizeFolder(item, opts.upscaled, opts.sizeLabel));
     if (opts.folderByProject) segs.push(safeName(opts.projectTitle || (item.projectId ? item.projectId.slice(0, 8) : 'project'), 80) || 'project');
     if (opts.folderByMonth) segs.push(item.createdMs != null ? fmtMonth(item.createdMs) : 'undated');
     segs.push(fileName);
@@ -790,7 +797,7 @@
     // projects
     scope: 'current', selectedProjects: [], extraProjects: '',
     // saving
-    downloadMode: 'browser', subfolder: 'Flow Export', folderByProject: true, folderByMonth: false, namePattern: 'date-title-id',
+    downloadMode: 'browser', subfolder: 'Flow Export', folderBySize: false, folderByProject: true, folderByMonth: false, namePattern: 'date-title-id',
     sidecar: 'none', manifestPerRun: true, allowPosterFallback: false, delayMs: 400,
     // automation
     autoMinutes: 0, runOnLoadHours: 0, autoProjectId: '', notify: true, showFab: true,
@@ -1051,8 +1058,9 @@
     return saveBlob(new Blob([text], { type: mime || 'text/plain;charset=utf-8' }), relPath, settings);
   }
 
-  function pathOptsFor(item, settings) {
-    return { subfolder: settings.subfolder, folderByProject: settings.folderByProject, folderByMonth: settings.folderByMonth, projectTitle: projectTitleFor(item.projectId) };
+  function pathOptsFor(item, settings, upscaled, sizeLabel) {
+    return { subfolder: settings.subfolder, folderBySize: settings.folderBySize, upscaled: !!upscaled, sizeLabel: sizeLabel || '',
+      folderByProject: settings.folderByProject, folderByMonth: settings.folderByMonth, projectTitle: projectTitleFor(item.projectId) };
   }
   function sidecarText(item, result, settings) {
     const lines = [
@@ -1101,7 +1109,7 @@
     let ext = extFromMime(mime, item.kind);
     try { ext = sniffExt(new Uint8Array(await blob.slice(0, 16).arrayBuffer())) || ext; } catch (e) { /* ignore */ }
     const name = buildFileName(item, ext, settings.namePattern, viaPoster ? 'preview' : '');
-    const rel = buildRelPath(item, name, pathOptsFor(item, settings));
+    const rel = buildRelPath(item, name, pathOptsFor(item, settings, false));
     const saved = await saveBlob(blob, rel, settings);
     return { name, path: saved.path, bytes: blob.size, how: saved.how, viaPoster, upscaled: false, qualityLabel: viaPoster ? 'preview' : 'original' };
   }
@@ -1485,7 +1493,7 @@
         let ext = extFromMime(blob.type, item.kind);
         try { ext = sniffExt(new Uint8Array(await blob.slice(0, 16).arrayBuffer())) || ext; } catch (e) { /* ignore */ }
         const name = buildFileName(item, ext, settings.namePattern, upscaled ? tag : '');
-        const rel = buildRelPath(item, name, pathOptsFor(item, settings));
+        const rel = buildRelPath(item, name, pathOptsFor(item, settings, upscaled, shownSize));
         capture.disarm();
         const saved = await saveBlob(blob, rel, settings);
         return { name, path: saved.path, bytes: blob.size, how: saved.how, viaPoster: false, upscaled, size: upscaled ? shownSize : '', qualityLabel };
@@ -2319,6 +2327,7 @@
               </div>
               <div class="row">
                 <label>Base folder <input type="text" id="subfolder" size="14"></label>
+                <label title="Upscaled copies go into Upscaled2K (or Upscaled4K, Upscaled1080p...), original pictures into Original1K, original clips into Original. The project and month folders, if ticked, sit inside."><input type="checkbox" id="folderBySize"> Folder per size</label>
                 <label><input type="checkbox" id="folderByProject"> Folder per project</label>
                 <label><input type="checkbox" id="folderByMonth"> Folder per month</label>
               </div>
@@ -2455,7 +2464,7 @@
       keywordInclude: 'kwInc', keywordExclude: 'kwExc', modelFilter: 'modelFilter', excludeUploads: 'excludeUploads', includeEditVersions: 'includeEditVersions', includeReferences: 'includeReferences', includeTrash: 'includeTrash',
       imageUpscale: 'imageUpscale', videoUpscale: 'videoUpscale', upscaleLabel: 'upscaleLabel', upscaleTimeoutSec: 'upscaleTimeout', fallbackOriginal: 'fallbackOriginal',
       upscalePauseSec: 'upscalePause', maxUpscalesPerRun: 'maxUpscales', dailyUpscaleCap: 'dailyCap', onLimit: 'onLimit', limitPauseHours: 'limitPause',
-      extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',
+      extraProjects: 'extra', downloadMode: 'mode', subfolder: 'subfolder', folderBySize: 'folderBySize', folderByProject: 'folderByProject', folderByMonth: 'folderByMonth', namePattern: 'namePattern',
       sidecar: 'sidecar', manifestPerRun: 'manifestPerRun', allowPosterFallback: 'poster', delayMs: 'delay',
       autoMinutes: 'auto', runOnLoadHours: 'runOnLoad', autoProjectId: 'autoProject', notify: 'notify', showFab: 'showFab', learnMode: 'learnMode',
       rpcListing: 'rpcListing', rpcListingAlt: 'rpcListingAlt', rpcMedia: 'rpcMedia', rpcCredits: 'rpcCredits', rpcUpscaleIds: 'rpcUpscale', downloadLabel: 'downloadLabel', optionsLabel: 'optionsLabel',
@@ -2565,7 +2574,7 @@
         (settings.maxUpscalesPerRun > 0 ? `, ${settings.maxUpscalesPerRun} per run` : '') + (settings.dailyUpscaleCap > 0 ? `, ${settings.dailyUpscaleCap} per day`
           : (() => { const fl = knownFlowLimit(settings); return fl ? `, Flow's limit ≈${fl.count} a day` : ''; })());
       $('sumProjects').textContent = settings.scope === 'selected' ? `${(settings.selectedProjects || []).length} selected` : 'this project only';
-      $('sumSaving').textContent = settings.downloadMode === 'tampermonkey' ? `Downloads/${settings.subfolder || ''}${settings.folderByProject ? '/project' : ''}${settings.folderByMonth ? '/month' : ''}` : 'Downloads folder, no subfolders';
+      $('sumSaving').textContent = settings.downloadMode === 'tampermonkey' ? `Downloads/${settings.subfolder || ''}${settings.folderBySize ? '/size' : ''}${settings.folderByProject ? '/project' : ''}${settings.folderByMonth ? '/month' : ''}` : 'Downloads folder, no subfolders';
       const a = [];
       if (settings.autoMinutes > 0) a.push(`every ${settings.autoMinutes} min`);
       if (settings.runOnLoadHours > 0) a.push(`on load after ${settings.runOnLoadHours} h`);
